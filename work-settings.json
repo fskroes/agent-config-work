@@ -1,0 +1,14 @@
+{
+  "includeCoAuthoredBy": false,
+  "subagents": {
+    "agents": {
+      "explore": { "model": "claude-opus-5.5", "effortLevel": "medium" },
+      "task": { "model": "claude-opus-5.5", "effortLevel": "medium" },
+      "general-purpose": { "model": "claude-opus-5.5", "effortLevel": "medium" },
+      "rubber-duck": { "model": "claude-opus-5.5", "effortLevel": "medium" },
+      "code-review": { "model": "claude-opus-5.5", "effortLevel": "medium" },
+      "research": { "model": "claude-opus-5.5", "effortLevel": "medium" },
+      "security-review": { "model": "claude-opus-5.5", "effortLevel": "medium" }
+    }
+  }
+}

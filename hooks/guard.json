@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "bash": "python3 \"$HOME/.copilot/hooks/guard.py\" --format copilot || true",
+        "matcher": "Bash|Edit|Write",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
