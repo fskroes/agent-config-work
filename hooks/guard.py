@@ -25,7 +25,7 @@ Rules (each one names the CLAUDE.md section it enforces):
   no-verify         --no-verify on commit/push/merge/rebase, or git commit -n ("Safety")
   force-push        force push without both lease flags, or to main/master    ("Safety")
   push-main         plain push to main/master in a team-mode repo             ("Branching")
-  merge-own         gh pr merge in a team repo -> ask; denied where claude.selfMerge sends it
+  merge-own         gh pr merge in a team repo -> ask; denied where agent.selfMerge sends it
                     through ~/.claude/scripts/self-merge.sh                    ("Branching")
   self-merge-config git config writes to the self-merge keys, or an edit of a git config
                     file: Fernando sets what may merge without him           ("Branching")
@@ -54,11 +54,14 @@ Rules (each one names the CLAUDE.md section it enforces):
                     ("Scope", "Tests and evals"; Lauren Tan: agents write "Lauren said never do this" into comments)
   new-doc           a Write that creates a .md file in a git work tree, outside the session scratchpad,
                     ~/.claude, repo skill folders (.claude/skills/<name>/) and the repos/ and docs/ folders of a
-                    Home Repo (git config claude.home true), in a turn whose user prompt
+                    Home Repo (git config agent.home true), in a turn whose user prompt
                     names no Markdown, doc or README (one repo: 110,418 words of docs, more than all its
                     Python, cut to 866 on 2026-11-07)                                          ("How to work")
 """
 import glob, json, os, posixpath, re, shlex, subprocess, sys, time
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import agent_config   # agent.<key>, else the old name claude.<key>; ships next to this file
 
 HOME = os.path.expanduser("~")
 # Edits that go through these dirs are the designed live-edit path of agent-config
@@ -70,13 +73,14 @@ BANNED_PHRASES = ("here's the kicker", "here's the thing", "plot twist", "let me
                   "the bottom line", "make no mistake")
 MAIN = ("main", "master")
 # The keys that decide what an agent may merge without Fernando (claude/scripts/self-merge.sh), and
-# claude.verify, which turns off the verify nudge (claude/hooks/verify_nudge.py) for a repo, and claude.home, which
-# makes a repo a Home Repo (rules new-doc and home-child).
-SELF_MERGE_KEYS = re.compile(r"claude(\.(selfmerge|selfmergeexclude|selfmergemethod|verifycmd|testcmd|verify|home))?",
+# verify, which turns off the verify nudge (claude/hooks/verify_nudge.py) for a repo, and home, which
+# makes a repo a Home Repo (rules new-doc and home-child). Denied under the name agent.<key> and under the
+# old name claude.<key>, which the scripts still read (agent_config.py): a write of either is a way in.
+SELF_MERGE_KEYS = re.compile(r"(agent|claude)(\.(selfmerge|selfmergeexclude|selfmergemethod|verifycmd|testcmd|verify|home))?",
                              re.I)
-SELF_MERGE_CONFIG = ("self-merge-config: Fernando sets claude.selfMerge, verifyCmd, testCmd, selfMergeExclude, "
+SELF_MERGE_CONFIG = ("self-merge-config: Fernando sets agent.selfMerge, verifyCmd, testCmd, selfMergeExclude, "
                      "selfMergeMethod, verify and home himself, never an agent. They decide what merges without him, "
-                     "which repos need a verify skill and which repo is the Home Repo. Give him the git config command to run with the ! prefix.")
+                     "which repos need a verify skill and which repo is the Home Repo. The old names claude.<key> count too. Give him the git config command to run with the ! prefix.")
 GH_VALUE_FLAGS = ("-R", "--repo", "--hostname")
 # ~/.claude/agent-metrics/changes.md links into the shared checkout of agent-config. A row
 # written there is never committed and blocks the next pull (a server checkout, 2026-10-15).
@@ -152,17 +156,17 @@ def repo_state(path):
         else:
             gd = git(d, "rev-parse", "--path-format=absolute", "--git-dir")
             cd = git(d, "rev-parse", "--path-format=absolute", "--git-common-dir")
-            REPO_STATE[d] = (True, git(d, "config", "claude.mode") == "solo", bool(gd) and gd == cd)
+            REPO_STATE[d] = (True, agent_config.get("mode", d) == "solo", bool(gd) and gd == cd)
     return REPO_STATE[d]
 
 
 def is_home_repo(path):
-    """The repo that holds path is a Home Repo: `git config claude.home true`, which Fernando sets. A Home Repo holds
+    """The repo that holds path is a Home Repo: `git config agent.home true`, which Fernando sets. A Home Repo holds
     the repo map (repos/) and the shared docs (docs/) of many repos; worktrees of it share the setting."""
     d = path if os.path.isdir(path) else os.path.dirname(path)
     while d and not os.path.isdir(d):
         d = os.path.dirname(d)
-    return bool(d) and git(d, "config", "--bool", "claude.home") == "true"
+    return bool(d) and agent_config.get("home", d, "--bool") == "true"
 
 
 def changes_log_in_shared(path):
@@ -1261,9 +1265,11 @@ def check_bash(cmd, cwd):
         if gw[:2] == ["pr", "merge"] or (gw[:1] == ["api"] and any(
                 re.search(r"pulls/[^/\s]+/merge\b|/merges\b|mergePullRequest|enqueuePullRequest", a) for a in toks)):
             d, (in_repo, solo, _) = state(None)
-            # The flag wins over solo, so `git config claude.mode solo` cannot reopen gh pr merge.
-            # Read like self-merge.sh reads it: repo config only, no includes.
-            if in_repo and git(d, "config", "--local", "--no-includes", "claude.selfMerge") == "verify":
+            # The flag wins over solo, so `git config agent.mode solo` cannot reopen gh pr merge.
+            # Read like self-merge.sh reads it: repo config only, no includes. "verify" under either
+            # name is enough here, the stricter reading: self-merge.sh lets agent.selfMerge win and
+            # STOPs when it is not verify, so a PR in a repo with two values waits for Fernando.
+            if in_repo and "verify" in agent_config.both("selfMerge", d, "--local", "--no-includes"):
                 return decide("deny", "self-merge: this repo merges its own PRs only through "
                                       "bash ~/.claude/scripts/self-merge.sh, which runs the tests and verify on the "
                                       "rebased head and merges that PR head only.")

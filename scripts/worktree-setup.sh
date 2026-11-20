@@ -4,11 +4,14 @@
 #   worktree-setup.sh <slug>      slug: lowercase, dash separated, three words at most
 #
 # Prints one of:
-#   SOLO <branch>        solo repo (git config claude.mode solo): branch in this checkout, no worktree
+#   SOLO <branch>        solo repo (git config agent.mode solo): branch in this checkout, no worktree
 #   WORKTREE <path>      team repo: the session's worktree, created or re-attached. Enter it next.
 #   STOP: <reason>       nothing was created. Exit 1.
 # Run it from the shared checkout, before the first write of the session.
 set -u
+# agent_cfg: agent.<key>, else the old name claude.<key>. Next to this script, links followed.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf %s "${BASH_SOURCE[0]}")")/agent-config.sh" \
+  || { echo "STOP: agent-config.sh is missing next to this script, run install.sh again"; exit 1; }
 SLUG=${1:-}
 case "$SLUG" in
   ''|*[!a-z0-9-]*|-*|*-|*-*-*-*) echo "STOP: usage: worktree-setup.sh <slug> (lowercase letters, digits, dashes, three words at most)"; exit 1 ;;
@@ -30,7 +33,7 @@ done
 # solo: no worktree, no owner prefix, no session id, so it also works under
 # agents that set no session variable. switch -c would carry uncommitted work
 # onto the new branch, which is what the clean check is for.
-if [ "$(git config claude.mode)" = solo ]; then
+if [ "$(agent_cfg mode)" = solo ]; then
   git status --porcelain | grep -q . && { echo "STOP: commit or stash first"; exit 1; }
   git switch -qc "$SLUG" "$BASE" || exit 1
   echo "SOLO $SLUG"; exit 0
@@ -81,11 +84,12 @@ fi
 
 # GitHub login, not the email local-part (often a stale handle). Cached per repo,
 # never empty: git config succeeds on "" and would poison the repo until unset.
-OWNER=$(git config claude.branchPrefix)
+# Written under the new name only; a value read from the old name claude.branchPrefix is copied.
+OWNER=$(agent_cfg branchPrefix)
 [ -n "$OWNER" ] || OWNER=$(gh api user --jq .login 2>/dev/null)
 [ -n "$OWNER" ] || OWNER=$(git config user.email | cut -d@ -f1)
-[ -n "$OWNER" ] || { echo "STOP: git config claude.branchPrefix YOUR_HANDLE"; exit 1; }
-git config claude.branchPrefix "$OWNER"
+[ -n "$OWNER" ] || { echo "STOP: git config agent.branchPrefix YOUR_HANDLE"; exit 1; }
+git config agent.branchPrefix "$OWNER"
 
 BRANCH="$OWNER/$SLUG-$SID"
 if registered "$WT"; then   # resumed session

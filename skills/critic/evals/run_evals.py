@@ -150,6 +150,9 @@ def build_repo(root, case):
     ek.write_files(root, {"SPEC.md": SPEC, "ledger/__init__.py": "", "ledger/pricing.py": BASE_PRICING,
                           "checks/check_pricing.py": BASE_CHECKS, "checks/run.py": RUNNER})
     ek.git(root, "init", "-q", "-b", "main")
+    # agent.mode is the name. claude.mode too: the run uses the scripts installed in ~/.claude, which
+    # read only the old name on a machine that has not pulled the rename yet.
+    ek.git(root, "config", "agent.mode", "solo")
     ek.git(root, "config", "claude.mode", "solo")
     ek.git(root, "add", "-A")
     ek.git(root, "commit", "-q", "-m", "initial import")

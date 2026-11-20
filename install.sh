@@ -8,7 +8,7 @@
 #                   instructions file, merge the settings keys
 #
 # Writes only: ~/.copilot/skills/<each folder in skills/>, ~/.copilot/copilot-instructions.md,
-# ~/.copilot/hooks/guard.{json,py}, ~/.claude/scripts/<each file in scripts/>, the keys of
+# ~/.copilot/hooks/{guard.json,guard.py,agent_config.py}, ~/.claude/scripts/<each file in scripts/>, the keys of
 # work-settings.json in ~/.copilot/settings.json, and the marker ~/.copilot/.agent-config-profile
 # (`work`: the personal install.sh of agent-config stops on this machine). Idempotent. Anything
 # it replaces is moved to ~/agent-config-work-backup-<timestamp>/, except the marker, which is
@@ -35,7 +35,8 @@ WSET="$REPO/work-settings.json"
 
 # Check everything first. A broken export must stop the run before any write.
 command -v python3 >/dev/null || { echo "  STOP: python3 is needed to edit settings.json" >&2; exit 1; }
-for f in copilot-instructions.md work-settings.json hooks/guard.json hooks/guard.py; do
+for f in copilot-instructions.md work-settings.json hooks/guard.json hooks/guard.py hooks/agent_config.py \
+         scripts/agent-config.sh; do
   [[ -f "$REPO/$f" ]] || { echo "  STOP: missing in this export: $f" >&2; exit 1; }
 done
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if isinstance(d, dict) and d else 1)' "$WSET" 2>/dev/null \
@@ -144,6 +145,7 @@ fi
 echo "copilot hooks, worktree scripts, capped_run.py:"
 link hooks/guard.json "$HOME/.copilot/hooks/guard.json"
 link hooks/guard.py   "$HOME/.copilot/hooks/guard.py"
+link hooks/agent_config.py "$HOME/.copilot/hooks/agent_config.py"   # guard.py imports it
 for f in "$REPO"/scripts/*; do
   [[ "$(basename "$f")" == .* ]] && continue
   link "scripts/$(basename "$f")" "$HOME/.claude/scripts/$(basename "$f")"

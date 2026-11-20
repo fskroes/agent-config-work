@@ -8,7 +8,7 @@
 # Exit 1 and print WRONG TREE when this is the shared checkout of a team repo.
 #
 # With a path, the checks run on the tree of that path. One more case: in a Home session
-# (the repo of the current folder has claude.home true), a path in another repo is OK only
+# (the repo of the current folder has agent.home true), a path in another repo is OK only
 # when its work tree root is in this session's record, made by worktree-child.sh. Else it
 # is WRONG TREE. A path in the Home Repo itself is checked like any other. A path outside
 # any git work tree is OK: no rule covers it.
@@ -19,6 +19,9 @@
 # back relative ("../.git"), the two stop matching, and the guard goes silent in
 # the shared checkout, which is the one direction that must never happen.
 set -u
+# agent_cfg: agent.<key>, else the old name claude.<key>. Next to this script, links followed.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf %s "${BASH_SOURCE[0]}")")/agent-config.sh" \
+  || { echo "STOP: agent-config.sh is missing next to this script, run install.sh again"; exit 1; }
 if [ $# -gt 0 ]; then
   P=$1
   while [ ! -d "$P" ]; do   # a file or a path not made yet: its nearest folder
@@ -27,7 +30,7 @@ if [ $# -gt 0 ]; then
   done
   [ -d "$P" ] || P=.
   TOP=$(git -C "$P" rev-parse --show-toplevel 2>/dev/null) || { echo "OK $P (not in a git work tree)"; exit 0; }
-  if [ "$(git config --bool claude.home 2>/dev/null)" = true ]; then
+  if [ "$(agent_cfg --bool home)" = true ]; then
     HOME_COMMON=$(git rev-parse --path-format=absolute --git-common-dir)
     THERE_COMMON=$(git -C "$P" rev-parse --path-format=absolute --git-common-dir)
     HOME_COMMON=$(cd "$HOME_COMMON" && pwd -P)
@@ -44,7 +47,7 @@ if [ $# -gt 0 ]; then
   fi
   cd "$P" || exit 1   # the checks below run on the tree of the path
 fi
-if [ "$(git config claude.mode)" = solo ]; then
+if [ "$(agent_cfg mode)" = solo ]; then
   echo "OK $(git rev-parse --show-toplevel) (solo repo)"; exit 0
 fi
 if [ "$(git rev-parse --path-format=absolute --git-dir)" != "$(git rev-parse --path-format=absolute --git-common-dir)" ]; then

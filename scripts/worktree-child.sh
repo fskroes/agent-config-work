@@ -7,7 +7,7 @@
 #   repo-path: any path inside the child repo
 #   slug:      lowercase, dash separated, three words at most
 #
-# Run it from a session whose repo is a Home Repo (git config claude.home true).
+# Run it from a session whose repo is a Home Repo (git config agent.home true).
 # It runs worktree-setup.sh in the shared checkout of the child, and records the
 # path it got for this session. guard.py (rule home-child) and worktree-guard.sh
 # read the record: a Home session may write in a child repo only there.
@@ -18,6 +18,9 @@
 #
 # Last line printed: CHILD <path>, exit 0. Or STOP: <reason>, exit 1.
 set -u
+# agent_cfg: agent.<key>, else the old name claude.<key>. Next to this script, links followed.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf %s "${BASH_SOURCE[0]}")")/agent-config.sh" \
+  || { echo "STOP: agent-config.sh is missing next to this script, run install.sh again"; exit 1; }
 REPO_PATH=${1:-}
 SLUG=${2:-}
 stop() { echo "STOP: $*"; exit 1; }
@@ -35,8 +38,8 @@ HERE=$(cd "$(dirname "$SRC")" && pwd)
 
 HOME_COMMON=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
   || stop "this folder is not in a git repo: start the session in the Home Repo"
-[ "$(git config --bool claude.home 2>/dev/null)" = true ] \
-  || stop "this repo is not a Home Repo. Fernando runs: git config claude.home true"
+[ "$(agent_cfg --bool home)" = true ] \
+  || stop "this repo is not a Home Repo. Fernando runs: git config agent.home true"
 HOME_COMMON=$(cd "$HOME_COMMON" && pwd -P)
 
 # Claude Code sets the first, GitHub Copilot CLI the second

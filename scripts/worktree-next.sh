@@ -9,6 +9,9 @@
 # Prints BRANCH <name> or STOP: <reason> (exit 1). Run it inside the session's worktree
 # (or the checkout, in solo mode).
 set -u
+# agent_cfg: agent.<key>, else the old name claude.<key>. Next to this script, links followed.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf %s "${BASH_SOURCE[0]}")")/agent-config.sh" \
+  || { echo "STOP: agent-config.sh is missing next to this script, run install.sh again"; exit 1; }
 SLUG=${1:-}
 case "$SLUG" in
   ''|*[!a-z0-9-]*|-*|*-|*-*-*-*) echo "STOP: usage: worktree-next.sh <slug> (lowercase letters, digits, dashes, three words at most)"; exit 1 ;;
@@ -25,11 +28,11 @@ for c in origin/main origin/master main master; do
   git rev-parse -q --verify "$c" >/dev/null && BASE=$c
 done
 [ -n "$BASE" ] || { echo "STOP: cannot find a base branch"; exit 1; }
-if [ "$(git config claude.mode)" = solo ]; then
+if [ "$(agent_cfg mode)" = solo ]; then
   NAME=$SLUG
 else
-  OWNER=$(git config claude.branchPrefix)
-  [ -n "$OWNER" ] || { echo "STOP: git config claude.branchPrefix is unset, run worktree-setup.sh first"; exit 1; }
+  OWNER=$(agent_cfg branchPrefix)
+  [ -n "$OWNER" ] || { echo "STOP: git config agent.branchPrefix is unset, run worktree-setup.sh first"; exit 1; }
   SID=${CLAUDE_CODE_SESSION_ID:-${COPILOT_AGENT_SESSION_ID:-}}   # Claude Code, else Copilot CLI
   SID=$(printf %s "$SID" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')   # cleaned and cut as worktree-setup.sh does
   SID=${SID:0:8}

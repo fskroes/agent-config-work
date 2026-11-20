@@ -78,7 +78,9 @@ Run this section before the triage block, which reports the branch it creates.
 
 Nothing lands on `main` directly. Parallel sessions in one repo need separate worktrees: a branch alone does not keep their files apart. **The worktree is the session, the branch is the task.** The **shared checkout** is the original clone, the first row of `git worktree list`. Nobody works there.
 
-**`git config claude.mode solo` turns the worktree off:** branch where you stand, merge it yourself, no PR. `team` is the default. Solo means one session at a time in this repo; set `team` before you start a second one.
+**`git config agent.mode solo` turns the worktree off:** branch where you stand, merge it yourself, no PR. `team` is the default. Solo means one session at a time in this repo; set `team` before you start a second one.
+
+The git config keys of this setup are named `agent.<key>` (`agent.mode`, `agent.branchPrefix`, `agent.selfMerge`, ...): Claude Code, Copilot CLI and Codex all read them. The old name `claude.<key>` still works where `agent.<key>` is not set. Scripts write only `agent.<key>`.
 
 **Setup, once per session, before the first write**, from the shared checkout. `<slug>`: lowercase, dash separated, three words at most.
 
@@ -118,7 +120,7 @@ bash ~/.claude/scripts/worktree-guard.sh
 
 **Solo merge needs a passing verify run.** Where the repo has a `verify-<app>` skill, merge only after verify passes on the rebased branch, and put its summary line in the report; otherwise after the tests pass. Changes to production data, migrations, secrets or deploy config go to a PR for Fernando, even in `solo` mode.
 
-**Self-merge in a team repo: `git config claude.selfMerge verify`.** Fernando sets every `claude.*` key, never an agent. Open the PR, then run `bash ~/.claude/scripts/self-merge.sh` from the worktree: that script is the only way. Its `STOP:` means the PR waits for Fernando; say so, do not work around it. Where a merge deploys, the flag is his standing approval for that deploy.
+**Self-merge in a team repo: `git config agent.selfMerge verify`.** Fernando sets every `agent.*` key, never an agent. Open the PR, then run `bash ~/.claude/scripts/self-merge.sh` from the worktree: that script is the only way. Its `STOP:` means the PR waits for Fernando; say so, do not work around it. Where a merge deploys, the flag is his standing approval for that deploy.
 
 **Enforced by a hook.** `~/.claude/hooks/guard.py` holds most rules here; its docstring lists them. Codex does not run it, so the rules stay written. Three are written only here:
 
