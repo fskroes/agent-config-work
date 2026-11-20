@@ -19,9 +19,12 @@ deterministic, from the stream-json transcript; no LLM judge is used.
 Each run works in a blind temp directory. The deterministic graders are unit-tested offline by
 tests/test_skill_evals.py against one good and one bad canned transcript.
 
-A case passes when at least --threshold of its --runs pass (default 2 of 3).
+A case passes when at least --threshold of its --runs pass (default 4 of 6). With 3 runs and a 2 of 3 bar, one
+unlucky run fails the case: on 2026-11-20 configs with no rule change between them scored 1/3, 2/3 and 3/3. With
+6 runs and a 4 of 6 bar, two failed runs still pass and three fail. The run cap stays at USD 15 (max_budget_usd): the lead sees it as "USD budget: $0/$15", and
+the skill tells it that a cap does not cancel the tournament, so the eval checks that rule.
 
-  python3 evals/run_evals.py                  # 3 runs
+  python3 evals/run_evals.py                  # 6 runs
   python3 evals/run_evals.py --runs 1         # one run
 Exit 0 when every case meets its threshold, 1 otherwise.
 """
@@ -282,7 +285,8 @@ def run(work, model, timeout, args):
 
 
 def main():
-    return ek.run_cases({"builders": run}, __doc__, default_runs=3, default_timeout=1500)
+    return ek.run_cases({"builders": run}, __doc__, default_runs=6, default_threshold=4 / 6,
+                        default_timeout=1500)
 
 
 if __name__ == "__main__":
