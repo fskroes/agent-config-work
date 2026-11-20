@@ -281,7 +281,8 @@ def run(work, model, timeout, args):
                                                    stop_when=make_stop(), max_budget_usd=15,
                                                    tools=("Bash", "Read", "Write", "Edit", "Glob", "Grep", "Agent", "Skill"))
     problems = grade(events)
-    return problems, {"stopped_early": stopped, "lead_calls": len(ek.tool_calls(events)), "cost_usd": ek.run_cost(events)}
+    return problems, {"stopped_early": stopped, "lead_calls": len(ek.tool_calls(events)), "cost_usd": ek.run_cost(events),
+                      "cost_basis": ek.cost_basis(events)}
 
 
 def main():
