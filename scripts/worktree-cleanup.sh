@@ -82,7 +82,7 @@ git worktree list --porcelain | awk '
     # "Landed" is not "is an ancestor": rebase and squash merges replay the work as
     # a new commit, so ancestry alone keeps every merged worktree forever. cherry
     # compares patch ids and still prints + for unlanded work. A multi-commit squash
-    # matches no single patch, so it kept all 30 FriendZone worktrees on 2026-10-22.
+    # matches no single patch, so it kept all 30 worktrees of one repo on 2026-10-22.
     # Then ask GitHub: a PR from this repo, merged into the base, whose head is the
     # local tip. A commit after the merge moves the tip and keeps the tree; a PR
     # merged into another branch, or from a fork with the same branch name, does

@@ -16,6 +16,9 @@ A Copilot sub-agent call carries `agent_id`, like Claude Code's.
 
 Rules (each one names the CLAUDE.md section it enforces):
   shared-checkout   Edit/Write in the shared checkout of a team-mode repo   ("Branching")
+  home-child        Edit/Write/MultiEdit/NotebookEdit in a child repo, by a session that runs in a Home Repo,
+                    outside the worktrees that session made with worktree-child.sh. Files outside a git
+                    work tree and a Copilot sub-agent call are not gated   ("Repos", root CLAUDE.md)
   changes-log       Edit/Write to agent-config's changes.md in a shared checkout, also through ~/.claude,
                     or Bash that names it other than to read it: log-change.sh does it ("Tests and evals")
   branch-in-shared  git switch/checkout in the shared checkout of a team repo ("Branching")
@@ -50,7 +53,8 @@ Rules (each one names the CLAUDE.md section it enforces):
                     record incidents (dates, metrics, "Fernando sets X") pass; .md and .txt are not read
                     ("Scope", "Tests and evals"; Lauren Tan: agents write "Lauren said never do this" into comments)
   new-doc           a Write that creates a .md file in a git work tree, outside the session scratchpad,
-                    ~/.claude and repo skill folders (.claude/skills/<name>/), in a turn whose user prompt
+                    ~/.claude, repo skill folders (.claude/skills/<name>/) and the repos/ and docs/ folders of a
+                    Home Repo (git config claude.home true), in a turn whose user prompt
                     names no Markdown, doc or README (one repo: 110,418 words of docs, more than all its
                     Python, cut to 866 on 2026-11-07)                                          ("How to work")
 """
@@ -66,12 +70,13 @@ BANNED_PHRASES = ("here's the kicker", "here's the thing", "plot twist", "let me
                   "the bottom line", "make no mistake")
 MAIN = ("main", "master")
 # The keys that decide what an agent may merge without Fernando (claude/scripts/self-merge.sh), and
-# claude.verify, which turns off the verify nudge (claude/hooks/verify_nudge.py) for a repo.
-SELF_MERGE_KEYS = re.compile(r"claude(\.(selfmerge|selfmergeexclude|selfmergemethod|verifycmd|testcmd|verify))?",
+# claude.verify, which turns off the verify nudge (claude/hooks/verify_nudge.py) for a repo, and claude.home, which
+# makes a repo a Home Repo (rules new-doc and home-child).
+SELF_MERGE_KEYS = re.compile(r"claude(\.(selfmerge|selfmergeexclude|selfmergemethod|verifycmd|testcmd|verify|home))?",
                              re.I)
 SELF_MERGE_CONFIG = ("self-merge-config: Fernando sets claude.selfMerge, verifyCmd, testCmd, selfMergeExclude, "
-                     "selfMergeMethod and verify himself, never an agent. They decide what merges without him and "
-                     "which repos need a verify skill. Give him the git config command to run with the ! prefix.")
+                     "selfMergeMethod, verify and home himself, never an agent. They decide what merges without him, "
+                     "which repos need a verify skill and which repo is the Home Repo. Give him the git config command to run with the ! prefix.")
 GH_VALUE_FLAGS = ("-R", "--repo", "--hostname")
 # ~/.claude/agent-metrics/changes.md links into the shared checkout of agent-config. A row
 # written there is never committed and blocks the next pull (a server checkout, 2026-10-15).
@@ -149,6 +154,15 @@ def repo_state(path):
             cd = git(d, "rev-parse", "--path-format=absolute", "--git-common-dir")
             REPO_STATE[d] = (True, git(d, "config", "claude.mode") == "solo", bool(gd) and gd == cd)
     return REPO_STATE[d]
+
+
+def is_home_repo(path):
+    """The repo that holds path is a Home Repo: `git config claude.home true`, which Fernando sets. A Home Repo holds
+    the repo map (repos/) and the shared docs (docs/) of many repos; worktrees of it share the setting."""
+    d = path if os.path.isdir(path) else os.path.dirname(path)
+    while d and not os.path.isdir(d):
+        d = os.path.dirname(d)
+    return bool(d) and git(d, "config", "--bool", "claude.home") == "true"
 
 
 def changes_log_in_shared(path):
@@ -243,6 +257,51 @@ def patch_paths(ti):
     edit whose text quotes a patch header is never read as one."""
     texts = [v for v in ti.values() if isinstance(v, str) and "*** Begin Patch" in v]
     return [a or b for t in texts for a, b in PATCH_FILE.findall(t)]
+
+
+def nearest_dir(path):
+    d = path if os.path.isdir(path) else os.path.dirname(path)
+    while d and not os.path.isdir(d):
+        d = os.path.dirname(d)
+    return d
+
+
+def check_home_child(path, p, copilot=False):
+    """A session that runs in a Home Repo writes in another repo only in a worktree that worktree-child.sh made
+    for it. The record is <home git common dir>/claude-child-worktrees/<session id>, one real path per line.
+    No session id, a Copilot sub-agent call (it sends its own id, which has no record) and any error allow."""
+    try:
+        cwd, sid = p.get("cwd"), p.get("session_id")
+        if not path or not cwd or not isinstance(sid, str) or not sid or (copilot and p.get("agent_id")):
+            return None
+        absp = os.path.abspath(os.path.join(cwd, os.path.expanduser(path)))
+        if absp.startswith(LIVE_EDIT_ROOTS):
+            return None
+        home_dir = nearest_dir(cwd)
+        if not home_dir or not is_home_repo(home_dir):
+            return None
+        d = nearest_dir(absp)
+        top = d and git(d, "rev-parse", "--show-toplevel")
+        if not top:
+            return None
+        home_common = git(home_dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        there = git(d, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if not home_common or not there or os.path.realpath(home_common) == os.path.realpath(there):
+            return None
+        home_common = os.path.realpath(home_common)
+        rec = os.path.join(home_common, "claude-child-worktrees", re.sub(rb"[^A-Za-z0-9_-]", b"_", str(sid).encode()).decode())
+        try:
+            with open(rec) as f:
+                recorded = {os.path.realpath(x.strip()) for x in f if x.strip()}
+        except OSError:
+            recorded = set()
+        if os.path.realpath(top) in recorded:
+            return None
+        return decide("deny", f"home-child: {absp} is in another repo ({os.path.realpath(top)}) and this Home session "
+                              "has no worktree there. Run: bash ~/.claude/scripts/worktree-child.sh <repo> <slug>, "
+                              "then edit through the path it prints.")
+    except Exception:
+        return None
 
 
 def check_edit(path, cwd=None):
@@ -442,6 +501,8 @@ NEW_DOC_ROOT = os.path.join(HOME, ".claude") + os.sep   # with the separator: ~/
 # Anchored: a repo cloned under ~/dev/skills/ or a docs/skills/ folder is not exempt.
 NEW_DOC_SCRATCH = re.compile(r"^(?:/private)?/tmp/claude-\d+/[^/]+/[^/]+/scratchpad/")   # path of the file
 NEW_DOC_SKILL = re.compile(r"^(?:\.claude|claude|codex)/skills/[^/]+/")   # path relative to the repo root
+# The repo map and the shared docs of a Home Repo are docs by design: a pointer per repo, a glossary and decisions per area.
+NEW_DOC_HOME = re.compile(r"^(?:repos|docs)/[^/]")   # path relative to the root of a Home Repo
 ASKS_FOR_DOC = re.compile(r"\bmarkdown\b|\.md\b|\breadmes?\b|\bdoc(?:s|uments?|umentation)?\b", re.I)
 NEW_DOC_MSG = ("new-doc: {name} would be a new Markdown file in a git repo, and this turn's prompt asks for no "
                "Markdown, doc or README. Documentation is the code, its tests, its comments and the commit message; "
@@ -525,7 +586,8 @@ def check_new_doc(tool, path, p, cwd=None):
         return None
     if not repo_state(absp)[0]:
         return None
-    if NEW_DOC_SKILL.match(repo_relative(absp)):
+    rel = repo_relative(absp)
+    if NEW_DOC_SKILL.match(rel) or (NEW_DOC_HOME.match(rel) and is_home_repo(absp)):
         return None
     # A Copilot sub-agent sends no transcript, so its turn's prompt cannot be read; like triage, it is not gated
     if p.get("agent_id") and not p.get("transcript_path"):
@@ -1488,7 +1550,8 @@ def main(argv=None):
             paths = [path] if path else ([] if named else patch_paths(ti))
             # Claude Code sends absolute paths; only Copilot's are joined to the session cwd
             cwd = p.get("cwd") if copilot else None
-            hit = next(((q, d) for q, d in ((q, check_edit(q, cwd)) for q in paths) if d), None)
+            hit = next(((q, d) for q, d in ((q, check_edit(q, cwd) or check_home_child(q, p, copilot)) for q in paths)
+                        if d), None)
             r = hit and hit[1]
             if not r and path:
                 r = check_history_comment(tool, dict(ti, file_path=path), existing_text(path, cwd))
