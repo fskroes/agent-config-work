@@ -31,6 +31,7 @@ else
   OWNER=$(git config claude.branchPrefix)
   [ -n "$OWNER" ] || { echo "STOP: git config claude.branchPrefix is unset, run worktree-setup.sh first"; exit 1; }
   SID=${CLAUDE_CODE_SESSION_ID:-${COPILOT_AGENT_SESSION_ID:-}}   # Claude Code, else Copilot CLI
+  SID=$(printf %s "$SID" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')   # cleaned and cut as worktree-setup.sh does
   SID=${SID:0:8}
   [ -n "$SID" ] || { echo "STOP: CLAUDE_CODE_SESSION_ID and COPILOT_AGENT_SESSION_ID are unset"; exit 1; }
   NAME="$OWNER/$SLUG-$SID"

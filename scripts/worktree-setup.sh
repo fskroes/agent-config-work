@@ -38,6 +38,9 @@ fi
 
 # Claude Code sets the first, GitHub Copilot CLI the second (work profile)
 SID=${CLAUDE_CODE_SESSION_ID:-${COPILOT_AGENT_SESSION_ID:-}}
+# The id goes into a branch name and a path: a / or a space in it would make a bad
+# one. Cleaned as worktree-child.sh does, then cut, so a UUID gives its first 8 characters.
+SID=$(printf %s "$SID" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
 SID=${SID:0:8}
 [ -n "$SID" ] || { echo "STOP: CLAUDE_CODE_SESSION_ID and COPILOT_AGENT_SESSION_ID are unset, every session would share one worktree"; exit 1; }
 ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
