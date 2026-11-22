@@ -4,8 +4,11 @@
 # from a clone of agent-config-work, and from the export that `install.sh --profile work`
 # of agent-config writes, so the two installs are one code path.
 #
-#   ./install.sh    link the skills, hooks and scripts of this folder, write the
-#                   instructions file, merge the settings keys
+#   ./install.sh [--name NAME]
+#                   link the skills, hooks and scripts of this folder, write the
+#                   instructions file, merge the settings keys. --name writes NAME
+#                   in place of "Fernando" in the instructions and remembers it in
+#                   ~/.local/state/agent-config-work/name; later runs reuse it.
 #
 # Writes only: ~/.copilot/skills/<each folder in skills/>, ~/.copilot/copilot-instructions.md,
 # ~/.copilot/hooks/{guard.json,guard.py,agent_config.py}, ~/.claude/scripts/<each file in scripts/>, the keys of
@@ -24,11 +27,16 @@ shopt -s dotglob nullglob
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP="$HOME/agent-config-work-backup-$(date +%Y%m%d-%H%M%S)"
+STATE="$HOME/.local/state/agent-config-work"
+NAME=""
 case "${1:-}" in
   "") ;;
-  -h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}"; exit 0 ;;
-  *) echo "unknown option: $1 (this installer takes no options)" >&2; exit 2 ;;
+  -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  --name) [[ -n "${2:-}" && $# -eq 2 ]] || { echo "usage: ./install.sh --name NAME" >&2; exit 2; }
+          NAME="$2" ;;
+  *) echo "unknown option: $1 (usage: ./install.sh [--name NAME])" >&2; exit 2 ;;
 esac
+[[ -n "$NAME" || ! -f "$STATE/name" ]] || NAME="$(<"$STATE/name")"
 
 CSET="$HOME/.copilot/settings.json"
 WSET="$REPO/work-settings.json"
@@ -133,13 +141,22 @@ done
 echo "copilot instructions:"
 # A real file, not a link: Copilot must find it when this folder moves.
 CI="$HOME/.copilot/copilot-instructions.md"
-if [[ -f "$CI" && ! -L "$CI" ]] && cmp -s "$REPO/copilot-instructions.md" "$CI"; then
+RENDERED="$(mktemp)"; trap 'rm -f "$RENDERED"' EXIT
+if [[ -n "$NAME" ]]; then
+  P="Fernando" D="$NAME" awk '{ s = $0; out = ""
+    while ((i = index(s, ENVIRON["P"])) > 0) { out = out substr(s, 1, i - 1) ENVIRON["D"]; s = substr(s, i + length(ENVIRON["P"])) }
+    print out s }' "$REPO/copilot-instructions.md" > "$RENDERED"
+  mkdir -p "$STATE"; printf '%s\n' "$NAME" > "$STATE/name"
+else
+  cp "$REPO/copilot-instructions.md" "$RENDERED"
+fi
+if [[ -f "$CI" && ! -L "$CI" ]] && cmp -s "$RENDERED" "$CI"; then
   echo "  ok      .copilot/copilot-instructions.md"
 else
   [[ -e "$CI" || -L "$CI" ]] && backup "$CI"
   mkdir -p "$(dirname "$CI")"
-  cp "$REPO/copilot-instructions.md" "$CI"
-  echo "  wrote   .copilot/copilot-instructions.md"
+  cp "$RENDERED" "$CI"
+  echo "  wrote   .copilot/copilot-instructions.md${NAME:+ (for $NAME)}"
 fi
 
 echo "copilot hooks, worktree scripts, capped_run.py:"
