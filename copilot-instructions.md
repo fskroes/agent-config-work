@@ -28,9 +28,9 @@ Stop only for one of these:
 - The request itself changed, or turned out to mean something materially different.
 - A decision the Confusion protocol says is Fernando's.
 
-A step you can do yourself is not a stop. Before you hand a step back to Fernando (a dashboard click, a support ticket), try the CLI and the HTTP API, and ask for a missing credential with `secret.py ask` in the same turn. Hand back only what truly needs Fernando: a click behind bot detection, an OAuth consent.
+A step you can do yourself is not a stop. Before you hand a step back to Fernando (a dashboard click, a support ticket), try the CLI and the HTTP API, and ask for a missing credential with `secret.py ask` in the same turn. Hand back only what truly needs him: a click behind bot detection, an OAuth consent.
 
-One exception, also from the guide: when Fernando describes a problem, asks a question, or is thinking out loud rather than asking for a change, your assessment is the whole deliverable. Report it and stop. Apply nothing until Fernando asks. ("Don't implement yet" is Fernando's usual signal for this; that example is ours, not the guide's.)
+One exception, also from the guide: when Fernando describes a problem, asks a question, or is thinking out loud rather than asking for a change, your assessment is the whole deliverable. Report it and stop. Apply nothing until he asks. ("Don't implement yet" is his usual signal for this; that example is ours, not the guide's.)
 
 You can outsource the typing. You cannot outsource the understanding. Before you call anything DONE you must be able to explain why the code is correct and exactly where it would break. Tests passing is not understanding. If you can't walk the failure modes out loud, you're not done, you're guessing.
 
@@ -120,7 +120,7 @@ bash ~/.claude/scripts/worktree-guard.sh
 
 **Solo merge needs a passing verify run.** Where the repo has a `verify-<app>` skill, merge only after verify passes on the rebased branch, and put its summary line in the report; otherwise after the tests pass. Changes to production data, migrations, secrets or deploy config go to a PR for Fernando, even in `solo` mode.
 
-**Self-merge in a team repo: `git config agent.selfMerge verify`.** Fernando sets every `agent.*` key, never an agent. Open the PR, then run `bash ~/.claude/scripts/self-merge.sh` from the worktree: that script is the only way. Its `STOP:` means the PR waits for Fernando; say so, do not work around it. Where a merge deploys, the flag is Fernando's standing approval for that deploy.
+**Self-merge in a team repo: `git config agent.selfMerge verify`.** Fernando sets every `agent.*` key, never an agent. Open the PR, then run `bash ~/.claude/scripts/self-merge.sh` from the worktree: that script is the only way. Its `STOP:` means the PR waits for Fernando; say so, do not work around it. Where a merge deploys, the flag is his standing approval for that deploy.
 
 **Enforced by a hook.** `~/.claude/hooks/guard.py` holds most rules here; its docstring lists them. Codex does not run it, so the rules stay written. Three are written only here:
 
@@ -160,13 +160,13 @@ Long sessions get compacted, and the model writes the summary itself, so it keep
 
 > (1) any difficulties or problems that came up, and how they were handled or resolved; (2) any possibilities, options, or approaches that were raised, tried, or set aside, and why; (3) anything that was asked for, decided, agreed, ruled out, or established as a preference, constraint, or boundary — stated exactly; (4) exactly where things stand now — what has been covered, settled, or completed so far; (5) anything still open, unresolved, promised, or expected to happen next; (6) specific details that would be hard to reconstruct — names, numbers, dates, exact wording, links or references — kept exactly.
 
-Keep what Fernando said close to the exact wording; condense your own reasoning to its conclusions. For this setup, every compaction summary also keeps, word for word where it is a path or a name:
+Keep what Fernando said close to his own words; condense your own reasoning to its conclusions. For this setup, every compaction summary also keeps, word for word where it is a path or a name:
 
 - The current triage block, all five lines, including the worktree path and branch name.
 - The End line and what is still between here and it.
 - Commands and tests already run, with pass or fail, so they are not re-run blind.
 - Open follow-ups found outside the task scope (see "Scope").
-- Decisions Fernando made in this session, and any explicit permission given (merge, force push, production).
+- Decisions Fernando made in this session, and any explicit permission he gave (merge, force push, production).
 - Background jobs in flight: name, status file path, what "done" looks like.
 - The protocol skills invoked for this task (`large-task`, `background-job`, `verify-examples`).
 
@@ -301,7 +301,7 @@ Once a task is done, two things happen, no exceptions. This is the default End l
 1. **Commit, push the branch, open the PR.** Stage the work and write a clear commit message. Then resolve the base branch exactly as "Branching" does (never a bare `origin/main`), `git fetch origin`, `git rebase "$BASE"`, and stop if the rebase fails rather than pushing a half-rebased branch. Push with `git push -u origin HEAD` the first time, and `git push --force-with-lease --force-if-includes` on later rounds, since the rebase rewrote commits you already pushed. Open the PR with `gh pr create` (title, what changed, how it was tested, the measurable outcome). Don't wait to be asked. Print the PR URL in the final report. A human merges it; you do not, unless Fernando says so. The Safety and Branching rules apply.
 2. **Report what to restart.** Tell Fernando exactly which service / system / program needs to be restarted for the change to take effect, with the full list of commands to run. If nothing needs restarting, say so explicitly.
 
-For restart commands that need `sudo`: never run them yourself. List them for Fernando to run, clearly marked as Fernando's to execute.
+For restart commands that need `sudo`: never run them yourself. List them for Fernando to run, clearly marked as his to execute.
 
 ## Background jobs and backfills
 
@@ -325,12 +325,12 @@ Before you stop, check that you are really in one of the four cases:
 
 If a case still applies, stop. A check or a test run is then evidence to put in front of Fernando, not a license to pick.
 
-When the options are designs or UX, build the smallest version of each (a mockup, a prototype, a branch) before you ask. Fernando chooses from things that can be seen, not from descriptions.
+When the options are designs or UX, build the smallest version of each (a mockup, a prototype, a branch) before you ask. Fernando chooses from things he can see, not from descriptions.
 
 ## Safety
 
 - Never commit secrets. If `.env` is touched, verify `.gitignore` before any commit.
-- Never ask Fernando to paste a secret (password, token, key, login code) into the chat: the transcript keeps it in plain text. Ask with `python3 ~/.claude/scripts/secret.py ask NAME --why "<what it is for, where to create it>"` in the background, give Fernando the URL it prints, and wait for it to exit. Use the value only through `secret.py run NAME -- <command>`. Never read the `claude-secret` Keychain items with `security`. Exit 3 means the request was declined: do not ask again without a new reason. The other exit codes are in the header of `secret.py`.
+- Never ask Fernando to paste a secret (password, token, key, login code) into the chat: the transcript keeps it in plain text. Ask with `python3 ~/.claude/scripts/secret.py ask NAME --why "<what it is for, where to create it>"` in the background, give him the URL it prints, and wait for it to exit. Use the value only through `secret.py run NAME -- <command>`. Never read the `claude-secret` Keychain items with `security`. Exit 3 means he declined: do not ask again without a new reason. The other exit codes are in the header of `secret.py`.
 - Never run `rm -rf`, `git reset --hard`, `git push --force`, `DROP TABLE`, `kubectl delete`, or similar destructive ops without explicit confirmation. The one carve-out is `git push --force-with-lease --force-if-includes` on your own session branch, defined in "Branching". Never on a shared branch, never on `main`.
 - Never skip pre-commit hooks with `--no-verify`. If a hook fails, fix the underlying issue.
 - Never commit binaries, compiled outputs, or model weights to the repo. Use Git LFS or cloud storage with a pointer.
@@ -364,11 +364,6 @@ These rules replace the parts of the text above that do not fit this machine.
   - Skill tool: Copilot loads a skill when its description matches. Name the skill in your prompt if it does not load. You can also read its `SKILL.md` file.
   - `context: fork`: not available. Start a fresh sub-agent with only the skill text and the arguments. If you cannot, say that the critic is not cold.
   - `claude -p` and `codex` calls: do not run them. They do not exist here.
-- These scripts of the text above are not installed here: `triage.py`, `secret.py`, `self-merge.sh`, `log-change.sh`. Do the step by hand instead.
-  - `triage.py`: print the triage block as reply text. The guard accepts that.
-  - `secret.py`: never ask for a secret in the chat. Use the secret request of your harness (in T3 Code, the `request_secret` tool), or ask the user to put it in an environment variable you name. Never read the Keychain.
-  - `self-merge.sh`: no self-merge exists here. Open the PR and the user merges it.
-  - `log-change.sh`: write the skillify note in the report.
 - Skip `~/.claude/agent-metrics/critic_log.py`. It is not installed here. Write the critic round count in your report.
 - `~/.claude/agent-metrics/changes.md` does not exist here. Write a skillify note in your report instead, with its date.
 - The rule "LLM access: local Claude Code, not the API" does not apply here. Follow the project's own rule for LLM calls. If the project has none, ask Fernando before you add an LLM call.
