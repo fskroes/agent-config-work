@@ -32,35 +32,32 @@ Rules (each one names the CLAUDE.md section it enforces):
   destructive       git reset --hard, git clean -f, rm -rf on / or ~  -> ask  ("Safety")
   empty-var-path    rm/rsync/cp/mv on a path that starts with $VAR/ when VAR may be empty -> ask ("Safety")
   em-dash / phrase  em dash or a banned phrase in a commit, PR or issue text  ("How Fernando wants to be talked to")
-  co-author         a Copilot co-author line in a commit message or PR        (transcript mining 2026-10-03)
+  co-author         a Copilot co-author line in a commit message or PR
   unbounded-test    swift test/build, xcodebuild build/test or a make test target that does not go
-                    through ~/.claude/scripts/capped_run.py                   ("Tests and evals", crash 2026-10-17)
+                    through ~/.claude/scripts/capped_run.py                   ("Tests and evals")
   triage            the main session changes a file (Edit, Write, MultiEdit, NotebookEdit) before it ever
                     printed the triage block with ~/.claude/scripts/triage.py or as reply text; sub-agents
                     are never gated                                           ("Task sizing")
   subagent-wait     a sub-agent Bash wait (until/while loop, sleep, wait, tail -f) in the foreground with a
                     timeout over 270 s (on Copilot: not mode async, initial_wait over 270). Sub-agent requests
                     use the 5 minute prompt cache, so a longer wait makes the next request write the whole
-                    context again (2026-W43: 137M tokens, about $315 in one week)  ("large-task", step 1)
+                    context again                                             ("large-task", step 1)
   secret-read       Bash that names a claude-secret Keychain item (service or account) or runs `security
                     dump-keychain`: a secret reaches a command only through `secret.py run`, so its value never
                     enters the transcript                                                   ("Safety")
   secret-stage      git add that would stage a credential file (.secret, .env, secrets.env) at any depth:
                     the file is not in .gitignore. Judged by `git add --dry-run` with the same arguments; an
-                    argument the shell still expands ($F, $(...)) is judged as -A over the whole repo
-                    (a .secret with a Stripe key sat unignored in agent-config, 2026-11-22)  ("Safety")
+                    argument the shell still expands ($F, $(...)) is judged as -A over the whole repo  ("Safety")
   fresh-session     the main session runs worktree-next.sh while its context is over 150k tokens: the next
-                    task starts in a new session (16 of the 18 biggest sessions chained tasks, 53% of all
-                    main-session tokens, 2026-09/10)                         ("Branching", second task)
+                    task starts in a new session                              ("Branching", second task)
   history-comment   a new code comment that quotes a chat instruction ("Fernando said never X", "as you asked",
                     "per the user's request") in an Edit, MultiEdit or Write of a code file. Comments that
                     record incidents (dates, metrics, "Fernando sets X") pass; .md and .txt are not read
-                    ("Scope", "Tests and evals"; Lauren Tan: agents write "Lauren said never do this" into comments)
+                    ("Scope", "Tests and evals")
   new-doc           a Write that creates a .md file in a git work tree, outside the session scratchpad,
                     ~/.claude, repo skill folders (.claude/skills/<name>/) and the repos/ and docs/ folders of a
                     Home Repo (git config agent.home true), in a turn whose user prompt
-                    names no Markdown, doc or README (one repo: 110,418 words of docs, more than all its
-                    Python, cut to 866 on 2026-11-07)                                          ("How to work")
+                    names no Markdown, doc or README                          ("How to work")
 """
 import glob, json, os, posixpath, re, shlex, subprocess, sys, time
 
@@ -87,7 +84,7 @@ SELF_MERGE_CONFIG = ("self-merge-config: Fernando sets agent.selfMerge, verifyCm
                      "which repos need a verify skill and which repo is the Home Repo. The old names claude.<key> count too. Give Fernando the git config command to run with the ! prefix.")
 GH_VALUE_FLAGS = ("-R", "--repo", "--hostname")
 # ~/.claude/agent-metrics/changes.md links into the shared checkout of agent-config. A row
-# written there is never committed and blocks the next pull (a server checkout, 2026-10-15).
+# written there is never committed and blocks the next pull.
 CHANGES_LOG = os.sep + os.path.join("claude", "agent-metrics", "changes.md")
 CHANGES_LOG_MSG = ("changes-log: changes.md is in the shared checkout of agent-config. A row written here is never "
                    "committed and blocks the next pull. Log it with: bash ~/.claude/scripts/log-change.sh "
@@ -103,8 +100,7 @@ LOG_COPIERS = {"cp", "rsync", "ditto", "install"}   # read when the file is a so
 LOG_INTERPRETERS = {"python", "python3", "perl", "ruby", "node", "osascript", "php"}
 LOG_PROGRAMS = {"awk", "gawk", "sed"}   # a path inside their program text is a write: print > "f", w f
 HEREDOC_KEEP_LINE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1([^\n]*)\n(.*?)\n\s*\2\s*(?=\n|$)", re.S)
-# Test and build runs that can take many GB: two of them at once crashed a 16 GB MacBook on 2026-10-17
-# (two tournament builders, `make test` -> swift test, 19 GB each). They go through capped_run.py.
+# Test and build runs that can take many GB: two of them at once can crash a laptop. They go through capped_run.py.
 # The rule holds only where the script is installed: guard.py updates on `git pull` (it is a link into the
 # clone), capped_run.py only after install.sh links it (both profiles, also --profile work).
 CAPPED_RUN = "capped_run.py"
@@ -125,7 +121,8 @@ RUNNERS = {"timeout": {"-s", "-k", "--signal", "--kill-after"}, "gtimeout": {"-s
 MAKE_VALUE_FLAGS = {"-C", "-f", "-j", "-l", "-o", "-W", "-I", "--file", "--directory", "--makefile"}
 UNBOUNDED_MSG = ("unbounded-test: run heavy tests and builds through the memory and time cap, inside the machine memory budget: "
                  "python3 ~/.claude/scripts/capped_run.py -- {cmd}. Options: --mem-gb (6), --timeout (900 s), --serial. "
-                 "On 2026-10-17 two parallel swift test runs used 19 GB each and crashed the 16 GB laptop.")
+                 "Two parallel runs without the cap can use all the memory of the machine."
+                 )
 # secret.py ask saves what Fernando typed on a phone as login Keychain items; service and account both start "claude-secret".
 # `security find-generic-password -w/-g` must name one of the two, and `dump-keychain -d` prints every item: that is how a
 # value would reach the transcript. SECRET_KEYCHAIN points secret.py at another keychain (tests only).
@@ -449,7 +446,7 @@ HISTORY_PATTERNS = (   # lowercase text. "the user" and "you" alone are an app's
 HISTORY_MSG = ("history-comment: line {n} of {name} quotes a chat instruction ('{line}'). A comment states the rule or "
                "the reason as a fact about the code (what breaks, what it protects), not who asked for it. Rewrite it "
                "that way, or drop it, and put the history in the commit message. Incidents and metrics "
-               "('crash 2026-10-17') stay fine.")
+               "stay fine.")
 
 
 def comment_lines(text, mark):
@@ -553,8 +550,8 @@ def existing_text(path, cwd=None):
         return ""
 
 
-# new-doc: agents wrote Markdown because the rules asked for docs. One repo reached 110,418 words of it, more than
-# all its Python, and was cut to 866 (2026-11-07). A new .md in a git work tree passes only in the session
+# new-doc: agents wrote Markdown because the rules asked for docs.
+# A new .md in a git work tree passes only in the session
 # scratchpad, under ~/.claude (skills, plans, memory notes), in a skill folder, or when the user prompt of this turn
 # asks for one. A skill folder (`.claude/skills/<name>/` of a repo, `claude/skills/<name>/` of agent-config) holds
 # agent instructions, not docs: the verify skill builder must write `.claude/skills/verify-<app>/SKILL.md` into every repo.
@@ -909,8 +906,8 @@ def commands(toks, depth=0, given=None):
 
 def empty_var_path(cmd, safe=None, exported=None, depth=0):
     """The first rm/rsync/cp/mv path that an empty variable turns into / or a path at / (root_path), else None.
-    In zsh (the Bash tool's shell) `set -- $p` does not split $p: $2 stayed empty and `rsync -a $2/ dest/` began to
-    copy /. NAME=value that runs for sure before the use (at the start, after ; or a newline or &&; not before & or |,
+    In zsh (the Bash tool's shell) `set -- $p` does not split $p, so $2 can stay empty.
+    NAME=value that runs for sure before the use (at the start, after ; or a newline or &&; not before & or |,
     not inside ( )) stores the value with expand, so that a later $NAME is judged as if the value were typed there.
     Set inside if/for/while it holds until the block ends or reaches else; set after && until the next ; or ||.
     unset, read, local, mapfile, printf -v, getopts, select and a later NAME= take it back. A for variable over literal
@@ -1157,7 +1154,7 @@ def check_text(text, where):
     commit` is judged on the echo text too. `git commit -F file` is not read."""
     if re.search(r"co-authored-by:\s*(github )?copilot", text, re.I):
         return decide("deny", f"co-author: the {where} credits Copilot. Use only the attribution lines "
-                              "Claude Code gives you.")  # found by transcript mining, 2026-10-03
+                              "Claude Code gives you.")
     if "—" in text:
         return decide("deny", f"em-dash: the {where} contains an em dash. Use a comma, a period or parentheses.")
     low = text.lower().replace("’", "'")
@@ -1353,11 +1350,12 @@ def check_bash(cmd, cwd):
 TRIAGE_SIZE = re.compile(r"^\W*Size:(?![^\n]*small\s*\|\s*medium\s*\|\s*large)\W*(small|medium|large)\b", re.I | re.M)
 TRIAGE_OTHER = re.compile(r"^\W*(Tests|Agents|Branch|End)\W*:", re.I | re.M)
 TRIAGE_DENIES = 2             # denies per session, then the gate gives up: a stuck agent must still be able to work
-# Claude Code writes the text of the current reply ~100 ms after PreToolUse starts (probe, 2026-10-18).
+# Claude Code writes the text of the current reply ~100 ms after PreToolUse starts.
 # GUARD_TRIAGE_WAIT scales the waits; the tests set it to 0.
 TRIAGE_POLLS = tuple(w * float(os.environ.get("GUARD_TRIAGE_WAIT") or 1) for w in (0.15, 0.15, 0.1))
 # A block written as reply text often goes out in the thinking channel instead, and the transcript keeps only a
-# one-line summary of thinking: 37 of 43 sessions on 2026-11-11 used both denies. So the message names the
+# one-line summary of thinking.
+# So the message names the
 # command, whose output is a tool result: always shown, always on disk, and it writes the `.printed` marker.
 TRIAGE_CMD = "python3 ~/.claude/scripts/triage.py"
 TRIAGE_MSG = ("triage: no triage block was printed in this session before the first file change. Print it now, "
