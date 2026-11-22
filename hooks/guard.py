@@ -28,7 +28,7 @@ Rules (each one names the CLAUDE.md section it enforces):
   merge-own         gh pr merge in a team repo -> ask; denied where agent.selfMerge sends it
                     through ~/.claude/scripts/self-merge.sh                    ("Branching")
   self-merge-config git config writes to the self-merge keys, or an edit of a git config
-                    file: Fernando sets what may merge without him           ("Branching")
+                    file: Fernando sets what may merge without a human merge ("Branching")
   destructive       git reset --hard, git clean -f, rm -rf on / or ~  -> ask  ("Safety")
   empty-var-path    rm/rsync/cp/mv on a path that starts with $VAR/ when VAR may be empty -> ask ("Safety")
   em-dash / phrase  em dash or a banned phrase in a commit, PR or issue text  ("How Fernando wants to be talked to")
@@ -83,8 +83,8 @@ MAIN = ("main", "master")
 SELF_MERGE_KEYS = re.compile(r"(agent|claude)(\.(selfmerge|selfmergeexclude|selfmergemethod|verifycmd|testcmd|verify|home))?",
                              re.I)
 SELF_MERGE_CONFIG = ("self-merge-config: Fernando sets agent.selfMerge, verifyCmd, testCmd, selfMergeExclude, "
-                     "selfMergeMethod, verify and home himself, never an agent. They decide what merges without him, "
-                     "which repos need a verify skill and which repo is the Home Repo. The old names claude.<key> count too. Give him the git config command to run with the ! prefix.")
+                     "selfMergeMethod, verify and home, never an agent. They decide what merges without Fernando, "
+                     "which repos need a verify skill and which repo is the Home Repo. The old names claude.<key> count too. Give Fernando the git config command to run with the ! prefix.")
 GH_VALUE_FLAGS = ("-R", "--repo", "--hostname")
 # ~/.claude/agent-metrics/changes.md links into the shared checkout of agent-config. A row
 # written there is never committed and blocks the next pull (a server checkout, 2026-10-15).
@@ -126,11 +126,11 @@ MAKE_VALUE_FLAGS = {"-C", "-f", "-j", "-l", "-o", "-W", "-I", "--file", "--direc
 UNBOUNDED_MSG = ("unbounded-test: run heavy tests and builds through the memory and time cap, inside the machine memory budget: "
                  "python3 ~/.claude/scripts/capped_run.py -- {cmd}. Options: --mem-gb (6), --timeout (900 s), --serial. "
                  "On 2026-10-17 two parallel swift test runs used 19 GB each and crashed the 16 GB laptop.")
-# secret.py ask saves what Fernando typed on his phone as login Keychain items; service and account both start "claude-secret".
+# secret.py ask saves what Fernando typed on a phone as login Keychain items; service and account both start "claude-secret".
 # `security find-generic-password -w/-g` must name one of the two, and `dump-keychain -d` prints every item: that is how a
 # value would reach the transcript. SECRET_KEYCHAIN points secret.py at another keychain (tests only).
 SECRET_REF = re.compile(r"claude-secret|\bSECRET_KEYCHAIN\b|\bdump-keychain\b")
-SECRET_MSG = ("secret-read: the claude-secret Keychain items hold values Fernando typed on his phone; they must never reach the "
+SECRET_MSG = ("secret-read: the claude-secret Keychain items hold values Fernando typed on a phone; they must never reach the "
               "transcript. Use: python3 ~/.claude/scripts/secret.py run NAME -- <command> (NAME becomes an env var, "
               "output is redacted), or secret.py list for the names. To get a new one: secret.py ask NAME --why '...'")
 # A credential file that git would stage. The name, never the value, reaches the message.
@@ -1539,8 +1539,8 @@ WORKTREE_NEXT = re.compile(r"(^|[;&|(\n])\s*(\w+=\S*\s+)*(env\s+)?((ba|z)?sh\s+(
                            re.M)
 FRESH_SESSION_MSG = ("fresh-session: this session holds {k}k tokens of context, and every request re-reads all of "
                      "it. Do not start the next task here. Finish this task at its End line, then tell Fernando "
-                     "that the next task starts in a new session, where worktree-setup.sh runs again. If he wants "
-                     "it in this session anyway, he runs the command himself with the ! prefix.")
+                     "that the next task starts in a new session, where worktree-setup.sh runs again. To keep it in "
+                     "this session anyway, Fernando runs the command with the ! prefix.")
 
 
 def check_fresh_session(p):

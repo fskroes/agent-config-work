@@ -5,12 +5,20 @@
 # of agent-config writes, so the two installs are one code path.
 #
 #   ./install.sh [--name NAME]
-#                   link the skills, hooks and scripts of this folder, write the
-#                   instructions file, merge the settings keys. --name writes NAME
-#                   in place of "Fernando" in the instructions and remembers it in
-#                   ~/.local/state/agent-config-work/name; later runs reuse it.
+#                   render the skills, hooks, scripts and instructions of this folder,
+#                   link them, write the instructions file, merge the settings keys.
+#                   --name writes NAME in place of every "Fernando" in what it renders
+#                   and remembers it in ~/.local/state/agent-config-work/name; later
+#                   runs reuse it. NAME: letters, spaces, . - ' (at most 60).
 #
-# Writes only: ~/.copilot/skills/<each folder in skills/>, ~/.copilot/copilot-instructions.md,
+# Render: ~/.local/share/agent-config-work/rendered is a link to a folder with a copy of skills/,
+# hooks/, scripts/ and copilot-instructions.md, the name written in. Each run makes a new folder
+# and moves the link in one step, so a hook that runs during an install never sees half a copy.
+# The links below point into it, never into this folder: a `git pull` changes nothing until
+# this script runs again (the LaunchAgent runs it after each pull that changes HEAD).
+#
+# Writes only: ~/.local/share/agent-config-work/{rendered,rendered.*,install.lock}, ~/.copilot/skills/<each folder in
+# skills/>, ~/.copilot/copilot-instructions.md,
 # ~/.copilot/hooks/{guard.json,guard.py,agent_config.py}, ~/.claude/scripts/<each file in scripts/>, the keys of
 # work-settings.json in ~/.copilot/settings.json, and the marker ~/.copilot/.agent-config-profile
 # (`work`: the personal install.sh of agent-config stops on this machine). Idempotent. Anything
@@ -31,23 +39,33 @@ STATE="$HOME/.local/state/agent-config-work"
 NAME=""
 case "${1:-}" in
   "") [[ $# -eq 0 ]] || { echo "usage: ./install.sh [--name NAME]" >&2; exit 2; } ;;
-  -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}"; exit 0 ;;
   --name) [[ $# -eq 2 && -n "$2" ]] || { echo "usage: ./install.sh --name NAME" >&2; exit 2; }
           NAME="$2" ;;
   *) echo "unknown option: $1 (usage: ./install.sh [--name NAME])" >&2; exit 2 ;;
 esac
-# The name lands in the middle of a sentence of the instructions: one line, no control character.
-if [[ -n "$NAME" && "$NAME" == *[[:cntrl:]]* ]]; then
-  echo "  STOP: --name must be one line of text" >&2; exit 2
-fi
 # No --name: the name of an earlier `--name` run, so the hourly update keeps it.
-[[ -n "$NAME" || ! -f "$STATE/name" ]] || NAME="$(head -n 1 "$STATE/name")"
+FROM_STATE=0
+[[ -n "$NAME" || ! -f "$STATE/name" ]] || { NAME="$(head -n 1 "$STATE/name")"; FROM_STATE=1; }
+command -v python3 >/dev/null || { echo "  STOP: python3 is needed to render the files and edit settings.json" >&2; exit 1; }
+# The name goes into Markdown, into strings and comments of guard.py and into a double-quoted
+# message of a shell script. Letters, spaces, . - and ' are safe in all of them (a ' is written
+# as \' in a .py file); a quote, $, \, { or a newline would break a file or a format string.
+if [[ -n "$NAME" ]] && ! python3 -c 'import sys; n = sys.argv[1]
+sys.exit(0 if len(n) <= 60 and n[0].isalpha() and all(c.isalpha() or c in " .-\x27" for c in n) else 1)' "$NAME"; then
+  if ((FROM_STATE)); then
+    echo "  STOP: the saved name in $STATE/name has a character --name does not take. Run ./install.sh --name NAME again." >&2
+  else
+    echo "  STOP: --name takes letters, spaces, . - and ' only, at most 60 (for example --name \"Anne-Marie O'Brien\")" >&2
+  fi
+  exit 2
+fi
 
 CSET="$HOME/.copilot/settings.json"
 WSET="$REPO/work-settings.json"
+RENDER="$HOME/.local/share/agent-config-work/rendered"
 
 # Check everything first. A broken export must stop the run before any write.
-command -v python3 >/dev/null || { echo "  STOP: python3 is needed to edit settings.json" >&2; exit 1; }
 for f in copilot-instructions.md work-settings.json hooks/guard.json hooks/guard.py hooks/agent_config.py \
          scripts/agent-config.sh; do
   [[ -f "$REPO/$f" ]] || { echo "  STOP: missing in this export: $f" >&2; exit 1; }
@@ -63,6 +81,20 @@ for d in "$REPO"/skills/*; do
 done
 ((${#WORK_NAMES[@]})) || { echo "  STOP: this export holds no skill" >&2; exit 1; }
 
+# One install at a time: the hourly update and a run by hand can overlap. Two runs would race on
+# the links, and the cleanup of one would delete the copy the other has just linked (the guard
+# fails open, so that turns it off). macOS has no flock command: python takes the lock on
+# install.lock and runs this script again, which inherits the locked file and holds it to the end.
+if [[ -z "${AGENT_CONFIG_WORK_LOCKED:-}" ]]; then
+  mkdir -p "$(dirname "$RENDER")"
+  exec python3 -c 'import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT, 0o644)
+fcntl.flock(fd, fcntl.LOCK_EX)
+os.set_inheritable(fd, True)
+os.execvpe("bash", ["bash"] + sys.argv[2:], dict(os.environ, AGENT_CONFIG_WORK_LOCKED="1"))' \
+    "$(dirname "$RENDER")/install.lock" "${BASH_SOURCE[0]}" "$@"
+fi
+
 backup() {  # backup <path>
   local p="$1" rel="${1#"$HOME"/}"
   mkdir -p "$BACKUP/$(dirname "$rel")"
@@ -70,14 +102,20 @@ backup() {  # backup <path>
   echo "  backed up $rel"
 }
 
-link() {  # link <path-in-export> <path-in-home>
-  local src="$REPO/$1" dst="$2"
+link() {  # link <path-in-the-render> <path-in-home>
+  local src="$RENDER/$1" dst="$2" t=""
   [[ -e "$src" ]] || { echo "  MISSING in export: $1" >&2; return 1; }
   if [[ -L "$dst" && "$(readlink "$dst")" == "$src" ]]; then
     echo "  ok      ${dst#"$HOME"/}"
     return
   fi
-  [[ -e "$dst" || -L "$dst" ]] && backup "$dst"
+  # A link an install made before the render existed points into this folder: replaced, no backup.
+  [[ -L "$dst" ]] && t="$(readlink "$dst")"
+  if [[ -n "$t" && "$t" == "$REPO"/* ]]; then
+    rm "$dst"
+  elif [[ -e "$dst" || -L "$dst" ]]; then
+    backup "$dst"
+  fi
   mkdir -p "$(dirname "$dst")"
   ln -s "$src" "$dst"
   echo "  linked  ${dst#"$HOME"/}"
@@ -100,6 +138,71 @@ else
   echo "  wrote   .copilot/.agent-config-profile (work)"
 fi
 
+echo "render:"
+python3 - "$REPO" "$RENDER" "$NAME" <<'PY' || { echo "  STOP: could not render the export into $RENDER" >&2; exit 1; }
+import os, shutil, sys, tempfile
+src, link, name = sys.argv[1:4]
+base = os.path.dirname(link)   # this run holds install.lock here, so no other run renders now
+os.makedirs(base, exist_ok=True)
+new = tempfile.mkdtemp(prefix="rendered.", dir=base)
+cur = ""
+try:
+    for top in ("skills", "hooks", "scripts", "copilot-instructions.md"):
+        root = os.path.join(src, top)
+        files = [root] if os.path.isfile(root) else [os.path.join(d, f) for d, _, fs in os.walk(root) for f in fs]
+        for path in files:
+            rel = os.path.relpath(path, src)
+            if os.path.basename(path) == ".DS_Store" or "__pycache__" in rel.split(os.sep):
+                continue
+            if os.path.islink(path):
+                sys.exit(f"  STOP: {rel} is a symlink")
+            data = open(path, "rb").read()
+            if name:
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    pass   # not text: copied as it is
+                else:
+                    data = text.replace("Fernando", name.replace("'", "\\'") if path.endswith(".py") else name).encode("utf-8")
+            out = os.path.join(new, rel)
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            with open(out, "wb") as f:
+                f.write(data)
+            shutil.copymode(path, out)
+    os.chmod(new, 0o755)
+
+    def tree(top):   # every file: path, mode, bytes; not the __pycache__ that a run of guard.py leaves
+        return sorted((os.path.relpath(os.path.join(d, f), top), os.stat(os.path.join(d, f)).st_mode,
+                       open(os.path.join(d, f), "rb").read())
+                      for d, _, fs in os.walk(top) if "__pycache__" not in d.split(os.sep) for f in fs)
+
+    # The link holds a plain folder name next to it (written below). Joined to base, not resolved:
+    # the cleanup at the end compares paths of the same form ($HOME may sit behind a symlink).
+    t = os.readlink(link) if os.path.islink(link) else ""
+    cur = os.path.join(base, t) if t.startswith("rendered.") and "/" not in t else ""
+    if cur and os.path.isdir(cur) and not os.path.islink(cur) and tree(cur) == tree(new):
+        shutil.rmtree(new)   # the same copy: a rerun changes nothing
+        new = cur
+    else:
+        tmp = link + ".tmp"
+        if os.path.lexists(tmp):
+            os.remove(tmp)
+        os.symlink(os.path.basename(new), tmp)
+        os.replace(tmp, link)   # one rename: the link points at the old copy or the new one, never at nothing
+except BaseException:
+    if new != cur:
+        shutil.rmtree(new, ignore_errors=True)
+    raise
+# Older copies, and the copy of a run that died halfway. Never the one the link points at.
+live = os.readlink(link)
+for e in os.listdir(base):
+    p = os.path.join(base, e)
+    if e.startswith("rendered.") and e != live and p != new and os.path.isdir(p) and not os.path.islink(p):
+        shutil.rmtree(p, ignore_errors=True)
+PY
+echo "  wrote   ${RENDER#"$HOME"/}${NAME:+ (for $NAME)}"
+[[ -z "$NAME" ]] || { mkdir -p "$STATE"; printf '%s\n' "$NAME" > "$STATE/name"; }
+
 echo "copilot skills:"
 # ours <link>: a skill link this install, or an earlier one, made:
 # - a link into this folder;
@@ -115,7 +218,7 @@ ours() {
   local t; t="$(readlink "$1")"
   [[ "$t" == /* ]] || t="$(dirname "$1")/$t"   # a relative target is relative to the link's folder
   case "$t" in
-    "$REPO"/*) return 0 ;;
+    "$RENDER"/*|"$REPO"/*) return 0 ;;
     */claude/skills/*|*/codex/skills/*) [[ ! -e "$1" || -f "${t%/*/skills/*}/copilot/work-skills.txt" ]] ;;
     *agent-config-work*/skills/*|*/.work-export/skills/*) [[ ! -e "$1" ]] ;;
     *) return 1 ;;
@@ -145,18 +248,10 @@ done
 
 echo "copilot instructions:"
 # A real file, not a link: Copilot must find it when this folder moves.
-# With a name, every "Fernando" becomes that name. The text uses the name, never he, him or his,
-# so the sentences still read right (tests/test_work_export.py checks it).
+# The render wrote the name in. The exported text uses the name, never he, him or his, so the
+# sentences still read right (tests/test_work_export.py checks it).
 CI="$HOME/.copilot/copilot-instructions.md"
-RENDERED="$(mktemp)"; trap 'rm -f "$RENDERED"' EXIT
-if [[ -n "$NAME" ]]; then
-  P="Fernando" D="$NAME" awk '{ s = $0; out = ""
-    while ((i = index(s, ENVIRON["P"])) > 0) { out = out substr(s, 1, i - 1) ENVIRON["D"]; s = substr(s, i + length(ENVIRON["P"])) }
-    print out s }' "$REPO/copilot-instructions.md" > "$RENDERED"
-  mkdir -p "$STATE"; printf '%s\n' "$NAME" > "$STATE/name"
-else
-  cp "$REPO/copilot-instructions.md" "$RENDERED"
-fi
+RENDERED="$RENDER/copilot-instructions.md"
 if [[ -f "$CI" && ! -L "$CI" ]] && cmp -s "$RENDERED" "$CI"; then
   echo "  ok      .copilot/copilot-instructions.md${NAME:+ (for $NAME)}"
 else
@@ -221,6 +316,17 @@ case "$status" in
   20) echo "  WARN    .copilot/settings.json is not valid JSON, left alone. Merge work-settings.json into it by hand." >&2 ;;
   *)  echo "  WARN    could not read .copilot/settings.json (python3 exit $status), left alone." >&2 ;;
 esac
+
+echo "hourly update:"
+# The update.sh of the LaunchAgent is a copy that launchagent.sh wrote. A newer launchagent.sh in
+# this export rewrites it, so a fix of the updater reaches every Mac with the next export. Only
+# the update.sh of this folder: an install from another copy of the export leaves it alone.
+UPD="$HOME/.local/share/agent-config-work-update/update.sh"
+if [[ -f "$UPD" && -f "$REPO/launchagent.sh" ]] && grep -qxF "REPO=\"$REPO\"" "$UPD"; then
+  bash "$REPO/launchagent.sh" --script-only
+else
+  echo "  none    (./launchagent.sh of this folder installs it)"
+fi
 
 [[ -d "$BACKUP" ]] || echo "(nothing needed backing up)"
 echo

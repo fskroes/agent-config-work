@@ -13,7 +13,7 @@ Long-running work often runs in the background: a batch, a migration, a backfill
 
 Progress percent, rate, and ETA are deterministic. Do not eyeball them in latent space. Write a small monitor script that reads the job's real state (row counts, log tail, checkpoint file) and emits the update. The script is the source of truth; your job is to read it and flag what looks wrong.
 
-**Snapshot before you touch anything.** By default, save every row the backfill will modify to `/tmp/` before it runs. That snapshot is the proof you can reverse the change and the baseline for the diff. If the snapshot would exceed 100k rows or 100MB, stop and ask Fernando for permission before snapshotting; do not start the job until he answers.
+**Snapshot before you touch anything.** By default, save every row the backfill will modify to `/tmp/` before it runs. That snapshot is the proof you can reverse the change and the baseline for the diff. If the snapshot would exceed 100k rows or 100MB, stop and ask Fernando for permission before snapshotting; do not start the job until Fernando answers.
 
 **On completion, produce the report.** Every backfill ends with a written report on what changed:
 
