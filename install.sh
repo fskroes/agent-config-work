@@ -4,8 +4,11 @@
 # from a clone of agent-config-work, and from the export that `install.sh --profile work`
 # of agent-config writes, so the two installs are one code path.
 #
-#   ./install.sh    link the skills, hooks and scripts of this folder, write the
-#                   instructions file, merge the settings keys
+#   ./install.sh [--name NAME]
+#                   link the skills, hooks and scripts of this folder, write the
+#                   instructions file, merge the settings keys. --name writes NAME
+#                   in place of "Fernando" in the instructions and remembers it in
+#                   ~/.local/state/agent-config-work/name; later runs reuse it.
 #
 # Writes only: ~/.copilot/skills/<each folder in skills/>, ~/.copilot/copilot-instructions.md,
 # ~/.copilot/hooks/{guard.json,guard.py,agent_config.py}, ~/.claude/scripts/<each file in scripts/>, the keys of
@@ -14,21 +17,31 @@
 # it replaces is moved to ~/agent-config-work-backup-<timestamp>/, except the marker, which is
 # never backed up or removed. It never moves anything into this folder.
 #
-# Updates: the LaunchAgent com.fskroes.agent-config-work-update runs `git pull --ff-only` in
-# this folder every hour, then this script when HEAD differs from the last installed commit
-# (state: ~/.local/state/agent-config-work/{status,update.log,installed-sha}). The clone reads
-# GitHub over HTTPS with a fine-grained token from the Keychain (service agent-config-work-ro),
-# through a credential helper in .git/config; the work network blocks SSH to GitHub.
+# Updates: ./launchagent.sh of this folder installs the LaunchAgent com.fskroes.agent-config-work-update.
+# It runs `git pull --ff-only` in this folder every hour, then this script when HEAD differs from
+# the last installed commit (state: ~/.local/state/agent-config-work/{status,update.log,installed-sha}).
+# That run passes no --name: the saved name is reused. agent-config-work is public, so the clone
+# reads GitHub over HTTPS with no credential; the work network blocks SSH to GitHub.
 set -euo pipefail
 shopt -s dotglob nullglob
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP="$HOME/agent-config-work-backup-$(date +%Y%m%d-%H%M%S)"
+STATE="$HOME/.local/state/agent-config-work"
+NAME=""
 case "${1:-}" in
-  "") ;;
-  -h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}"; exit 0 ;;
-  *) echo "unknown option: $1 (this installer takes no options)" >&2; exit 2 ;;
+  "") [[ $# -eq 0 ]] || { echo "usage: ./install.sh [--name NAME]" >&2; exit 2; } ;;
+  -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  --name) [[ $# -eq 2 && -n "$2" ]] || { echo "usage: ./install.sh --name NAME" >&2; exit 2; }
+          NAME="$2" ;;
+  *) echo "unknown option: $1 (usage: ./install.sh [--name NAME])" >&2; exit 2 ;;
 esac
+# The name lands in the middle of a sentence of the instructions: one line, no control character.
+if [[ -n "$NAME" && "$NAME" == *[[:cntrl:]]* ]]; then
+  echo "  STOP: --name must be one line of text" >&2; exit 2
+fi
+# No --name: the name of an earlier `--name` run, so the hourly update keeps it.
+[[ -n "$NAME" || ! -f "$STATE/name" ]] || NAME="$(head -n 1 "$STATE/name")"
 
 CSET="$HOME/.copilot/settings.json"
 WSET="$REPO/work-settings.json"
@@ -132,14 +145,25 @@ done
 
 echo "copilot instructions:"
 # A real file, not a link: Copilot must find it when this folder moves.
+# With a name, every "Fernando" becomes that name. The text uses the name, never he, him or his,
+# so the sentences still read right (tests/test_work_export.py checks it).
 CI="$HOME/.copilot/copilot-instructions.md"
-if [[ -f "$CI" && ! -L "$CI" ]] && cmp -s "$REPO/copilot-instructions.md" "$CI"; then
-  echo "  ok      .copilot/copilot-instructions.md"
+RENDERED="$(mktemp)"; trap 'rm -f "$RENDERED"' EXIT
+if [[ -n "$NAME" ]]; then
+  P="Fernando" D="$NAME" awk '{ s = $0; out = ""
+    while ((i = index(s, ENVIRON["P"])) > 0) { out = out substr(s, 1, i - 1) ENVIRON["D"]; s = substr(s, i + length(ENVIRON["P"])) }
+    print out s }' "$REPO/copilot-instructions.md" > "$RENDERED"
+  mkdir -p "$STATE"; printf '%s\n' "$NAME" > "$STATE/name"
+else
+  cp "$REPO/copilot-instructions.md" "$RENDERED"
+fi
+if [[ -f "$CI" && ! -L "$CI" ]] && cmp -s "$RENDERED" "$CI"; then
+  echo "  ok      .copilot/copilot-instructions.md${NAME:+ (for $NAME)}"
 else
   [[ -e "$CI" || -L "$CI" ]] && backup "$CI"
   mkdir -p "$(dirname "$CI")"
-  cp "$REPO/copilot-instructions.md" "$CI"
-  echo "  wrote   .copilot/copilot-instructions.md"
+  cp "$RENDERED" "$CI"
+  echo "  wrote   .copilot/copilot-instructions.md${NAME:+ (for $NAME)}"
 fi
 
 echo "copilot hooks, worktree scripts, capped_run.py:"
@@ -205,5 +229,6 @@ echo "  1. copilot -> /login"
 echo "  2. /skills list shows exactly the folders in skills/ of this export"
 echo "  3. Ask it to run: git commit --no-verify  -> the guard must deny it"
 echo "  4. Make a commit: git log -1 --format=%B has no Co-authored-by: Copilot line"
-echo "To update: the LaunchAgent com.fskroes.agent-config-work-update pulls and runs ./install.sh every hour"
-echo "  (log: ~/.local/state/agent-config-work/update.log). By hand: git pull --ff-only && ./install.sh in this folder."
+echo "To update: ./launchagent.sh installs the LaunchAgent com.fskroes.agent-config-work-update, which pulls and"
+echo "  runs ./install.sh every hour (log: ~/.local/state/agent-config-work/update.log)."
+echo "  By hand: git pull --ff-only && ./install.sh in this folder."

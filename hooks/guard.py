@@ -45,6 +45,10 @@ Rules (each one names the CLAUDE.md section it enforces):
   secret-read       Bash that names a claude-secret Keychain item (service or account) or runs `security
                     dump-keychain`: a secret reaches a command only through `secret.py run`, so its value never
                     enters the transcript                                                   ("Safety")
+  secret-stage      git add that would stage a credential file (.secret, .env, secrets.env) at any depth:
+                    the file is not in .gitignore. Judged by `git add --dry-run` with the same arguments; an
+                    argument the shell still expands ($F, $(...)) is judged as -A over the whole repo
+                    (a .secret with a Stripe key sat unignored in agent-config, 2026-11-22)  ("Safety")
   fresh-session     the main session runs worktree-next.sh while its context is over 150k tokens: the next
                     task starts in a new session (16 of the 18 biggest sessions chained tasks, 53% of all
                     main-session tokens, 2026-09/10)                         ("Branching", second task)
@@ -129,6 +133,60 @@ SECRET_REF = re.compile(r"claude-secret|\bSECRET_KEYCHAIN\b|\bdump-keychain\b")
 SECRET_MSG = ("secret-read: the claude-secret Keychain items hold values Fernando typed on his phone; they must never reach the "
               "transcript. Use: python3 ~/.claude/scripts/secret.py run NAME -- <command> (NAME becomes an env var, "
               "output is redacted), or secret.py list for the names. To get a new one: secret.py ask NAME --why '...'")
+# A credential file that git would stage. The name, never the value, reaches the message.
+SECRET_FILES = {".secret", ".env", "secrets.env"}
+# git add flags that stage only tracked files, ask per hunk, or stage nothing: no dry run needed.
+ADD_SKIP = re.compile(r"-[a-zA-Z]*[upien][a-zA-Z]*|--(update|patch|interactive|edit|dry-run|refresh)")
+STAGE_MSG = ("secret-stage: this git add would stage {files}. A credential file never enters git: add its name to "
+             ".gitignore in this change (check with git check-ignore -v <file>), then stage again. Rule: AGENTS.md 'Safety'.")
+STAGE_DYNAMIC_MSG = ("secret-stage: this git add names a shell expansion ($VAR, $(...) or backticks) that the hook cannot "
+                     "read, and git would stage {files} in this repo. Add those names to .gitignore in this change, or "
+                     "name the paths literally. Rule: AGENTS.md 'Safety'.")
+# An argument the shell still has to expand: the hook sees `$F`, git would see the file.
+DYNAMIC_ARG = re.compile(r"[$`]")
+
+
+def staged_secrets(d, rest, backtick=False):
+    """(credential files, dynamic) for `git add <rest>` run in d. Asks git itself with --dry-run, so every pathspec
+    form (., -A, :/, a folder, a glob, -f past .gitignore) is judged the way git judges it. When an argument is a
+    shell expansion the path is unknown, so the dry run covers the whole repo (-A, and -f when given): dynamic is
+    True and any credential file git could stage there counts. The parser lifts a backtick substitution out of
+    the command, so `backtick` (the command holds one) counts as an expansion too.
+    Fails open: no repo, a timeout or a git error gives []."""
+    flags = [a for a in rest if a.startswith("-") and a != "--"]
+    if any(ADD_SKIP.fullmatch(a) for a in flags):
+        return [], False
+    dynamic = backtick or any(DYNAMIC_ARG.search(a) for a in rest)
+    if dynamic:
+        force = any(a in ("-f", "--force") or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a) for a in flags)
+        rest = ["-A"] + (["-f"] if force else [])
+    try:
+        r = subprocess.run(["git", "-C", d, "add", "--dry-run", "--ignore-missing", *rest],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return [], dynamic
+    # One line per path, `add 'path'`, also when the exit code is 1 because an ignored path was named.
+    paths = re.findall(r"^add '(.*)'$", r.stdout, re.M)
+    return sorted(p for p in paths if posixpath.basename(p) in SECRET_FILES), dynamic
+
+
+BACKTICK_MARK = "GUARDBACKTICKMARK"
+
+
+def add_has_backtick(body):
+    """Does a git add or git stage segment hold a backtick substitution in its own arguments? raw_segments turns a
+    backtick into a separator, so the substitution leaves the segment; a marker word stays in it instead. A backtick
+    in another segment (a commit message, an echo) does not count."""
+    try:
+        for toks in segments(body.replace("`", f" {BACKTICK_MARK} ")):
+            sub, rest, _ = strip_git(toks)
+            if sub in ("add", "stage") and any(BACKTICK_MARK in a for a in rest):
+                return True
+    except Exception:   # a parse failure must not make an ordinary git add look dynamic
+        return False
+    return False
+
+
 GLUED_REDIRECT = re.compile(r"(?:&>>?|[0-9]*>>?\|?)([^>]+)$")   # printf x>>file: one token, no space
 
 
@@ -1223,6 +1281,10 @@ def check_bash(cmd, cwd):
             r = check_text(cmd, "commit message")
             if r:
                 return r
+        if sub in ("add", "stage"):   # git stage is git's synonym of git add
+            found, dynamic = staged_secrets(state(cdir)[0], rest, "`" in body and add_has_backtick(body))
+            if found:
+                return decide("deny", (STAGE_DYNAMIC_MSG if dynamic else STAGE_MSG).format(files=", ".join(found)))
         if sub == "push":
             force = any(a in ("-f", "--force") or a.startswith("--force-with-lease") or a.startswith("+")
                         for a in rest)
