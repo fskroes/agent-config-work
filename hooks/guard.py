@@ -66,7 +66,9 @@ Rules (each one names the CLAUDE.md section it enforces):
   sudo              Bash that runs sudo, also behind env, command, xargs, bash -c and eval -> ask: Fernando
                     runs it                                                   ("After every task")
   base64            Bash that prints base64 text: base64 or openssl base64 as the last stage of a pipeline,
-                    with no decode flag, no output redirect and no -o/-out/--output  ("Context window")
+                    or piped only into head, tail, cat, tr, fold, cut or a grep that prints lines, also in a
+                    heredoc a shell runs; with no decode flag, no output redirect and no -o/-out/--output
+                                                                              ("Context window")
   rewrite           a Write over an existing file of 200 lines or more that keeps 80% or more of its non-blank
                     lines: Edit changes the lines that differ                 ("Scope")
   pr-body           gh pr create with no body or with --fill, or a body that does not say how it was tested
@@ -1365,6 +1367,10 @@ SUDO_MSG = ("sudo: this command runs sudo. Never run it yourself. Give Fernando 
 STDOUT_REDIRECT = re.compile(r"(?:1|&)?>>?\|?(?!&)\S*")
 BASE64_DECODE = re.compile(r"-[a-zA-Z]*[dD][a-zA-Z]*|-decode|--decode")
 BASE64_PASSIVE = {"head", "tail", "cat", "tr", "fold", "cut"}
+BASE64_FILTERS = {"grep", "egrep", "fgrep", "rg"}
+HEREDOC_MARK = re.compile(r"<<-?\s*(['\"]?)[A-Za-z_][A-Za-z0-9_]*\1")
+BASE64_QUIET = re.compile(r"-[a-zA-Z]*[cql][a-zA-Z]*|--(?:count|quiet|silent|files-with-matches)")
+GREP_QUIET = re.compile(r"-[a-zA-Z]*L[a-zA-Z]*|--files-without-match")
 BASE64_OUTPUT = {"-o", "-out", "--output"}
 ENCODED_MSG = ("base64: this command prints base64 text into the transcript. Base64 data can trigger safety filters "
               "and fills the context. Write it to a file (> out.b64, or -o out.b64) and read the part you need.")
@@ -1446,25 +1452,59 @@ def stdout_redirected(parts, k):
     return any(STDOUT_REDIRECT.fullmatch(t) for t in toks) or bool(after == "&" and following[:1] and following[0].startswith(">"))
 
 
+def shows_lines(toks):
+    """True when toks passes the lines it reads on to stdout: head, tail, cat, tr, fold, cut, or a grep or rg that
+    prints the lines it finds (no count, quiet or file-name option)."""
+    head = os.path.basename(toks[0])
+    if head in BASE64_PASSIVE:
+        return True
+    quiet = [BASE64_QUIET] if head == "rg" else [BASE64_QUIET, GREP_QUIET]
+    return head in BASE64_FILTERS and not any(q.fullmatch(a) for a in toks[1:] for q in quiet)
+
+
+def pipeline_shows(parts, i):
+    """True when the output of segment i of raw_segments(..., seps=True) reaches the terminal: it ends its pipeline
+    or feeds only commands that show the lines, and no stage redirects stdout."""
+    end = i
+    while parts[end][2] == "|" and end + 1 < len(parts):
+        end += 1
+    runs = [[p for k, p, _ in commands(parts[j][1]) if k == "run"] for j in range(i + 1, end + 1)]
+    return all(r and all(shows_lines(p) for p in r) for r in runs) and not any(stdout_redirected(parts, j) for j in range(i, end + 1))
+
+
+def shell_heredoc_prints(cmd):
+    """The heredoc bodies of cmd that a shell runs with its stdout on the terminal: `bash <<SH`, `cat <<SH | bash`,
+    `cat <<SH | bash | head`, and not `bash <<SH > out` or `cat <<SH | bash | wc`."""
+    bodies = []
+    for m in HEREDOC.finditer(cmd):
+        start = cmd.rfind("\n", 0, m.start()) + 1
+        line = cmd[start:m.start() + len(m.group(0).split("\n", 1)[0])]
+        if not SHELL_HEREDOC.search(line):
+            continue
+        header = HEREDOC_MARK.sub(" ", line, count=1)
+        parts = raw_segments(mask_single_quotes(header), seps=True)
+        if any(any(os.path.basename(t) in SHELLS for t in toks) and pipeline_shows(parts, k)
+               for k, (_, toks, _) in enumerate(parts)):
+            bodies.append(m.group(3))
+    return bodies
+
+
 def prints_base64(cmd, depth=0):
-    """True when an encoding base64 command of cmd ends its pipeline, or feeds only head, tail, cat, tr, fold or cut,
-    and nothing in that pipeline redirects stdout. Decoding, encoding into a file, a command substitution (the value
-    is captured) and a pipe into any other command pass."""
+    """True when an encoding base64 command of cmd ends its pipeline, or feeds only commands that show the lines
+    (shows_lines), and nothing in that pipeline redirects stdout. A heredoc body that a shell runs counts as
+    commands. Decoding, encoding into a file, a command substitution (the value is captured) and a pipe into any
+    other command pass."""
     body, _ = split_heredocs(cmd)
     outer, _ = blank_substitutions(mask_single_quotes(body))
     parts = raw_segments(outer, seps=True)
     for i, (_, toks, after) in enumerate(parts):
         for kind, payload, _ in commands(toks):
             if kind == "run" and encodes_base64(payload):
-                end = i
-                while parts[end][2] == "|" and end + 1 < len(parts):
-                    end += 1
-                heads = [{os.path.basename(p[0]) for k, p, _ in commands(parts[j][1]) if k == "run"} for j in range(i + 1, end + 1)]
-                if all(h and h <= BASE64_PASSIVE for h in heads) and not any(stdout_redirected(parts, j) for j in range(i, end + 1)):
+                if pipeline_shows(parts, i):
                     return True
             if kind in ("shell", "eval") and depth < 3 and after != "|" and not stdout_redirected(parts, i) and prints_base64(payload, depth + 1):
                 return True
-    return False
+    return depth < 3 and any(prints_base64(b, depth + 1) for b in shell_heredoc_prints(cmd))
 
 
 def pr_create_parts(rest):
