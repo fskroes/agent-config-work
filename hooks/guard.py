@@ -58,8 +58,21 @@ Rules (each one names the CLAUDE.md section it enforces):
                     ~/.claude, repo skill folders (.claude/skills/<name>/) and the repos/ and docs/ folders of a
                     Home Repo (git config agent.home true), in a turn whose user prompt
                     names no Markdown, doc or README                          ("How to work")
+  new-comment       an Edit, MultiEdit or Write of a code file in a git work tree that adds a comment.
+                    Kept and moved comments, shebang and encoding lines, tool directives (noqa, type: ignore,
+                    pragma, eslint-disable, ...), license headers, the work-export markers and Swift MARK: pass.
+                    A repo opts out with git config agent.comments allow, which only Fernando sets: the reason
+                    goes in the commit message and a rule becomes a check   ("Scope", "Tests and evals")
+  sudo              Bash that runs sudo, also behind env, command, xargs, bash -c and eval -> ask: Fernando
+                    runs it                                                   ("After every task")
+  base64            Bash that prints base64 text: base64 or openssl base64 as the last stage of a pipeline,
+                    with no decode flag, no output redirect and no -o/-out/--output  ("Context window")
+  rewrite           a Write over an existing file of 200 lines or more that keeps 80% or more of its non-blank
+                    lines: Edit changes the lines that differ                 ("Scope")
+  pr-body           gh pr create with no body or with --fill, or a body that does not say how it was tested
+                    and what outcome it moves                                 ("After every task")
 """
-import glob, json, os, posixpath, re, shlex, subprocess, sys, time
+import collections, glob, json, os, posixpath, re, shlex, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import agent_config   # agent.<key>, else the old name claude.<key>; ships next to this file
@@ -77,11 +90,11 @@ MAIN = ("main", "master")
 # verify, which turns off the verify nudge (claude/hooks/verify_nudge.py) for a repo, and home, which
 # makes a repo a Home Repo (rules new-doc and home-child). Denied under the name agent.<key> and under the
 # old name claude.<key>, which the scripts still read (agent_config.py): a write of either is a way in.
-SELF_MERGE_KEYS = re.compile(r"(agent|claude)(\.(selfmerge|selfmergeexclude|selfmergemethod|verifycmd|testcmd|verify|home))?",
+SELF_MERGE_KEYS = re.compile(r"(agent|claude)(\.(selfmerge|selfmergeexclude|selfmergemethod|verifycmd|testcmd|verify|home|cleanup|cleanuphome|comments))?",
                              re.I)
 SELF_MERGE_CONFIG = ("self-merge-config: Fernando sets agent.selfMerge, verifyCmd, testCmd, selfMergeExclude, "
-                     "selfMergeMethod, verify and home, never an agent. They decide what merges without Fernando, "
-                     "which repos need a verify skill and which repo is the Home Repo. The old names claude.<key> count too. Give Fernando the git config command to run with the ! prefix.")
+                     "selfMergeMethod, verify, home, cleanup, cleanupHome and comments, never an agent. They decide what merges without Fernando, "
+                     "which repos need a verify skill, which repo is the Home Repo, where cleanup issues go and which repo may hold code comments. The old names claude.<key> count too. Give Fernando the git config command to run with the ! prefix.")
 GH_VALUE_FLAGS = ("-R", "--repo", "--hostname")
 # ~/.claude/agent-metrics/changes.md links into the shared checkout of agent-config. A row
 # written there is never committed and blocks the next pull.
@@ -447,6 +460,56 @@ HISTORY_MSG = ("history-comment: line {n} of {name} quotes a chat instruction ('
                "the reason as a fact about the code (what breaks, what it protects), not who asked for it. Rewrite it "
                "that way, or drop it, and put the history in the commit message. Incidents and metrics "
                "stay fine.")
+_ID = r"[\w\-./@]+"
+_CODE = r"[A-Za-z]+\d+"
+
+
+def _list(item):
+    return rf"{item}(?:\s*,\s*{item})*"
+
+
+ALLOWED_COMMENT = re.compile("|".join((
+    r"-\*-\s*coding[:=]\s*[-\w.]+\s*-\*-", r"coding[:=]\s*[-\w.]+",
+    rf"noqa(?::\s*{_list(_CODE)})?", r"type:\s*ignore(?:\[[\w\-, ]+\])?",
+    r"pragma:\s*(?:no\s+(?:cover|branch)|nocover|nobranch)",
+    rf"pylint:\s*(?:skip-file|(?:disable|enable|disable-next|disable-line)\s*=\s*{_list(_ID)})",
+    rf"(?:mypy|pyright):\s*{_list(r'[\w\-]+(?:=[\w\-.]+)?')}",
+    r"fmt:\s*(?:off|on|skip)", r"isort:\s*[\w\-]+",
+    rf"eslint-(?:disable|enable)(?:-next-line|-line)?(?:\s+{_list(_ID)})?",
+    r"@ts-(?:expect-error|ignore|nocheck|check)", r"@(?:vitest|jest)-environment\s+[\w\-]+",
+    r"/\s*<reference\s[^<>]*?/?>", r"prettier-ignore",
+    r"swiftlint:(?:disable|enable)(?::(?:next|this|previous))?(?:\s+[a-z_]+)*",
+    rf"shellcheck(?:\s+(?:disable={_list(r'SC\d+')}|source=\S+|source-path=\S+|shell=\w+))+",
+    r"istanbul ignore (?:next|if|else|file)", r"c8 ignore (?:next|start|stop|file)(?:\s+\d+)?",
+    r"nolint(?:nextline)?(?::\s*" + _list(r"[\w\-]+") + r")?(?:\([\w\-, ]+\))?",
+    r"go:build\s+!?\(?[\w.]+\)?(?:\s*(?:&&|\|\|)\s*!?\(?[\w.]+\)?)*", r"go:generate\s+\S.*",
+)), re.I)
+HEADER_COMMENT = re.compile(r"(?:spdx-|copyright\b|\(c\)|license\b|licensed\b|mark:).*", re.I)
+PROSE_WORDS = frozenset((
+    "because", "since", "hack", "workaround", "needed", "need", "needs", "due", "so", "we", "it", "is", "are", "the",
+    "this", "that", "for", "as", "otherwise", "but", "and", "odd", "why", "reason", "todo", "fixme", "to", "of", "a"))
+
+
+def allowed_comment(text):
+    """True when the comment is a header line, or only tool directives with their own arguments (codes, rule ids).
+    Free prose after a directive ('noqa because x', 'eslint-disable -- why') makes it a comment again."""
+    text = text.strip()
+    if HEADER_COMMENT.fullmatch(text):
+        return True
+    for part in re.split(r"\s+#\s+", text):
+        if not ALLOWED_COMMENT.fullmatch(part.strip()):
+            return False
+        if any(w in PROSE_WORDS for w in re.split(r"[\s,=:]+", part.lower())):
+            return False
+    return True
+
+
+NEW_COMMENT_MSG = ("new-comment: line {n} of the new text in {name} adds a comment ('{line}'){more}. Add no code "
+                   "comments: nothing checks a comment, and it can hide a workaround. Fix the root cause. Rename or "
+                   "restructure the code so that it needs no comment. Put the reason in the commit message. Turn a "
+                   "rule into a check: a test, a lint rule or a guard. Shebang lines, tool directives (noqa, "
+                   "type: ignore, eslint-disable) and license headers pass. Fernando sets git config agent.comments "
+                   "allow for a repo that needs comments.")
 
 
 def comment_lines(text, mark):
@@ -512,15 +575,21 @@ def in_work_tree(path):
         d = os.path.dirname(d)
 
 
-def check_history_comment(tool, ti, existing=None):
-    """Deny a NEW code comment that quotes a chat instruction. Edit and MultiEdit read the lines of new_string that
-    old_string lacks; Write reads the lines that `existing` (the file before the write) lacks. Markdown, text and
-    unknown file types, and files outside a git work tree, are not read: a doc may say who decided what."""
-    path = ti.get("file_path") or ""
+def comment_mark(path):
+    """The line comment marker of the file's type, or None for a type the guard does not read."""
     base = os.path.basename(path)
-    mark = COMMENT_MARKS.get(base.rsplit(".", 1)[-1].lower() if "." in base else "") or COMMENT_MARKS_BY_NAME.get(base)
+    return COMMENT_MARKS.get(base.rsplit(".", 1)[-1].lower() if "." in base else "") or COMMENT_MARKS_BY_NAME.get(base)
+
+
+def added_comments(tool, ti, existing=None):
+    """[(line number, comment text)] of the comments an Edit, MultiEdit or Write adds. Edit and MultiEdit compare
+    new_string with old_string; Write compares the content with `existing` (the file before the write). A comment
+    whose line or text is already in the old text is kept or moved, not added. Markdown, text and unknown file
+    types, and files outside a git work tree, are not read: a doc may say who decided what."""
+    path = ti.get("file_path") or ""
+    mark = comment_mark(path)
     if not mark or not in_work_tree(path):
-        return None
+        return []
     if tool == "Write":
         pairs = [(ti.get("content") or "", existing or "")]
     elif tool == "Edit":
@@ -528,16 +597,65 @@ def check_history_comment(tool, ti, existing=None):
     elif tool == "MultiEdit":
         pairs = [(e.get("new_string") or "", e.get("old_string") or "") for e in ti.get("edits") or []]
     else:
-        return None
+        return []
+    out = []
     for new, old in pairs:
         seen = {l.strip() for l in old.splitlines()}
+        seen_text = {c.strip() for _, c in comment_lines(old, mark)}
         lines = new.splitlines()
         for n, c in comment_lines(new, mark):
-            if lines[n - 1].strip() in seen:
-                continue
-            if history_hit(c):
-                return decide("deny", HISTORY_MSG.format(n=n, name=base, line=c.strip()[:80]))
+            if lines[n - 1].strip() not in seen and c.strip() not in seen_text:
+                out.append((n, c))
+    return out
+
+
+def check_history_comment(tool, ti, existing=None):
+    """Deny a NEW code comment that quotes a chat instruction."""
+    base = os.path.basename(ti.get("file_path") or "")
+    for n, c in added_comments(tool, ti, existing):
+        if history_hit(c):
+            return decide("deny", HISTORY_MSG.format(n=n, name=base, line=c.strip()[:80]))
     return None
+
+
+def comments_allowed(path):
+    """True when git config agent.comments (old name claude.comments) is `allow` for the repo of the file."""
+    value = agent_config.get("comments", nearest_dir(os.path.dirname(os.path.abspath(os.path.expanduser(path)))))
+    return (value or "").strip().lower() == "allow"
+
+
+def check_new_comment(tool, ti, existing=None):
+    """Deny a NEW code comment, except the kinds in ALLOWED_COMMENT. A repo opts out with agent.comments allow."""
+    path = ti.get("file_path") or ""
+    hits = [(n, c) for n, c in added_comments(tool, ti, existing) if c.strip() and not allowed_comment(c)]
+    if not hits or comments_allowed(path):
+        return None
+    n, c = hits[0]
+    more = f" and {len(hits) - 1} more" if len(hits) > 1 else ""
+    return decide("deny", NEW_COMMENT_MSG.format(n=n, name=os.path.basename(path), line=c.strip()[:60], more=more))
+
+
+REWRITE_MIN_LINES = 200
+REWRITE_KEEP_SHARE = 0.8
+REWRITE_MSG = ("rewrite: this Write replaces {name} ({total} lines) and keeps {kept}% of its non-blank lines unchanged. "
+               "A whole-file rewrite hides the real change from the reviewer and costs more output. Use Edit for the "
+               "lines that change.")
+
+
+def check_rewrite(tool, ti, existing=None):
+    """Deny a Write over an existing file of REWRITE_MIN_LINES lines or more that keeps REWRITE_KEEP_SHARE or more of
+    its non-blank lines unchanged. Lines are compared as a multiset, so a moved line counts as kept."""
+    lines = (existing or "").splitlines()
+    if tool != "Write" or len(lines) < REWRITE_MIN_LINES:
+        return None
+    old = collections.Counter(l.rstrip() for l in lines if l.strip())
+    new = collections.Counter(l.rstrip() for l in (ti.get("content") or "").splitlines() if l.strip())
+    total = sum(old.values())
+    kept = sum(min(n, new[l]) for l, n in old.items())
+    if not total or kept / total < REWRITE_KEEP_SHARE:
+        return None
+    name = os.path.basename(ti.get("file_path") or "")
+    return decide("deny", REWRITE_MSG.format(name=name, total=len(lines), kept=round(100 * kept / total)))
 
 
 def existing_text(path, cwd=None):
@@ -564,8 +682,8 @@ NEW_DOC_SKILL = re.compile(r"^(?:\.claude|claude|codex)/skills/[^/]+/")   # path
 NEW_DOC_HOME = re.compile(r"^(?:repos|docs)/[^/]")   # path relative to the root of a Home Repo
 ASKS_FOR_DOC = re.compile(r"\bmarkdown\b|\.md\b|\breadmes?\b|\bdoc(?:s|uments?|umentation)?\b", re.I)
 NEW_DOC_MSG = ("new-doc: {name} would be a new Markdown file in a git repo, and this turn's prompt asks for no "
-               "Markdown, doc or README. Documentation is the code, its tests, its comments and the commit message; "
-               "a new doc is a decision for Fernando. Put the reason in a comment or the commit message, keep notes "
+               "Markdown, doc or README. Documentation is the code, its tests and the commit message; "
+               "a new doc is a decision for Fernando. Put the reason in the commit message, keep notes "
                "in the session scratchpad, or ask Fernando for the file. Rule: AGENTS.md 'How to work'.")
 PROMPT_TAIL = 64 << 20   # bytes read back from the end for the prompt: a turn is far shorter than this
 # User lines the harness writes, not the person: an interrupt marker, a notification, a local command's output
@@ -1242,6 +1360,162 @@ def secret_reach(body):
         return True
 
 
+SUDO_MSG = ("sudo: this command runs sudo. Never run it yourself. Give Fernando the command to run, marked as "
+            "Fernando's to execute, and say why it needs sudo.")
+STDOUT_REDIRECT = re.compile(r"(?:1|&)?>>?\|?(?!&)\S*")
+BASE64_DECODE = re.compile(r"-[a-zA-Z]*[dD][a-zA-Z]*|-decode|--decode")
+BASE64_PASSIVE = {"head", "tail", "cat", "tr", "fold", "cut"}
+BASE64_OUTPUT = {"-o", "-out", "--output"}
+ENCODED_MSG = ("base64: this command prints base64 text into the transcript. Base64 data can trigger safety filters "
+              "and fills the context. Write it to a file (> out.b64, or -o out.b64) and read the part you need.")
+PR_TESTED = re.compile(r"\b(?:test\w*|verif\w*|ran|eval\w*|checked)\b", re.I)
+PR_OUTCOME = re.compile(r"\b(?:outcomes?|metrics?|measur\w*)\b", re.I)
+PR_FLAGS = {"--title": "title", "--body": "body", "--body-file": "file", "-t": "title", "-b": "body", "-F": "file"}
+PR_BODY_MSG = ("pr-body: this gh pr create is missing: {missing}. A PR states a title, what changed, how it was "
+               "tested and the outcome (the metric or the behavior) it moves. {how}Pass the text with --body or "
+               "--body-file. --fill copies the commit messages and states neither the test nor the outcome.")
+
+
+def sudo_in(toks, depth=0):
+    """True when the command in toks runs sudo, also behind env, command, xargs, time, bash -c, eval and find -exec.
+    `command -v sudo` only looks for it."""
+    while toks:
+        head = os.path.basename(toks[0])
+        if head == "sudo":
+            return True
+        if head == "command" and len(toks) > 1 and re.fullmatch(r"-[a-zA-Z]*[vV][a-zA-Z]*", toks[1]):
+            return False
+        r = REDIRECT.fullmatch(toks[0])
+        if r:
+            toks = toks[1:] if r.group(1) else toks[2:]
+            continue
+        if NAME_VALUE.fullmatch(toks[0]) or head in WRAPPERS or head in MORE_WRAPPERS:
+            takes = VALUE_OPTS.get(head, ())
+            toks = toks[1:]
+            while toks and toks[0].startswith("-") and len(toks) > 1:
+                toks = toks[2:] if toks[0] in takes else toks[1:]
+            if head == "timeout" and toks:
+                toks = toks[1:]
+            continue
+        break
+    if not toks or depth >= 3:
+        return False
+    head = os.path.basename(toks[0])
+    if head in SHELLS:
+        return any(re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", t) and i + 1 < len(toks) and runs_sudo(toks[i + 1], depth + 1)
+                   for i, t in enumerate(toks[1:], 1))
+    if head == "eval":
+        return runs_sudo(" ".join(toks[1:]), depth + 1)
+    if head == "find":
+        return any(sudo_in(toks[i + 1:], depth + 1) for i, t in enumerate(toks) if t in ("-exec", "-execdir", "-ok", "-okdir"))
+    return False
+
+
+def runs_sudo(cmd, depth=0):
+    """True when any command of cmd, a command substitution inside it, or a shell heredoc body in it runs sudo."""
+    body, _ = split_heredocs(cmd)
+    shell_bodies = [m.group(3) for m in HEREDOC.finditer(cmd)
+                    if SHELL_HEREDOC.search(cmd[cmd.rfind("\n", 0, m.start()) + 1:m.start() + len(m.group(0).split("\n", 1)[0])])]
+    for text in [body] + shell_bodies:
+        outer, inner = blank_substitutions(mask_single_quotes(text))
+        if any(sudo_in(toks, depth) for toks in raw_segments(outer)):
+            return True
+        if depth < 3 and any(runs_sudo(i, depth + 1) for i in inner):
+            return True
+    return False
+
+
+def encodes_base64(toks):
+    """True when toks is base64 or openssl base64 / openssl enc -base64 that encodes to stdout: no decode flag and
+    no output file option."""
+    head, args = os.path.basename(toks[0]), toks[1:]
+    if head == "openssl":
+        if not args or not (args[0] == "base64" or (args[0] == "enc" and ("-base64" in args or "-a" in args))):
+            return False
+    elif head != "base64":
+        return False
+    return not any(BASE64_DECODE.fullmatch(a) or a in BASE64_OUTPUT or a.startswith("--output=") for a in args)
+
+
+def stdout_redirected(parts, k):
+    """True when segment k of raw_segments(..., seps=True) sends its stdout to a file (`> f`, `&> f`, not `>&2`)."""
+    _, toks, after = parts[k]
+    following = parts[k + 1][1] if k + 1 < len(parts) else []
+    if after == "&" and toks and re.fullmatch(r"\d*>>?", toks[-1]):
+        toks = toks[:-1]
+    return any(STDOUT_REDIRECT.fullmatch(t) for t in toks) or bool(after == "&" and following[:1] and following[0].startswith(">"))
+
+
+def prints_base64(cmd, depth=0):
+    """True when an encoding base64 command of cmd ends its pipeline, or feeds only head, tail, cat, tr, fold or cut,
+    and nothing in that pipeline redirects stdout. Decoding, encoding into a file, a command substitution (the value
+    is captured) and a pipe into any other command pass."""
+    body, _ = split_heredocs(cmd)
+    outer, _ = blank_substitutions(mask_single_quotes(body))
+    parts = raw_segments(outer, seps=True)
+    for i, (_, toks, after) in enumerate(parts):
+        for kind, payload, _ in commands(toks):
+            if kind == "run" and encodes_base64(payload):
+                end = i
+                while parts[end][2] == "|" and end + 1 < len(parts):
+                    end += 1
+                heads = [{os.path.basename(p[0]) for k, p, _ in commands(parts[j][1]) if k == "run"} for j in range(i + 1, end + 1)]
+                if all(h and h <= BASE64_PASSIVE for h in heads) and not any(stdout_redirected(parts, j) for j in range(i, end + 1)):
+                    return True
+            if kind in ("shell", "eval") and depth < 3 and after != "|" and not stdout_redirected(parts, i) and prints_base64(payload, depth + 1):
+                return True
+    return False
+
+
+def pr_create_parts(rest):
+    """(title given, body values, body files, other flags) of the words after `gh pr create`."""
+    given, bodies, files, flags, i = False, [], [], set(), 0
+    while i < len(rest):
+        a = rest[i]
+        name, eq, value = a.partition("=") if a.startswith("--") else (a[:2], "", a[2:])
+        kind = PR_FLAGS.get(name)
+        if kind:
+            if not (eq or value) and i + 1 < len(rest):
+                i += 1
+                value = rest[i]
+            if kind == "title":
+                given = True
+            (bodies if kind == "body" else files if kind == "file" else []).append(value)
+        else:
+            flags.add(a)
+        i += 1
+    return given, bodies, files, flags
+
+
+def check_pr_body(rest, cwd, heredocs):
+    """Deny gh pr create with no body, or a body that does not say how it was tested and what outcome it moves.
+    The text of a body that the hook cannot see (`-` for stdin, a file that is not there, a variable) passes."""
+    title, bodies, files, flags = pr_create_parts(rest)
+    if flags & {"--web", "-w", "--help", "-h"}:
+        return None
+    fill = bool(flags & {"--fill", "-f", "--fill-first", "--fill-verbose"})
+    text, unseen = "\n".join(bodies), any("$" in v or "`" in v for v in bodies)
+    for f in files:
+        if f == "-" or f.startswith("/dev/"):
+            unseen = True
+            continue
+        try:
+            with open(os.path.join(cwd, os.path.expanduser(f))) as fh:
+                text += "\n" + fh.read(1 << 20)
+        except OSError:
+            unseen = True
+    if unseen:
+        text += "\n" + heredocs
+        if not heredocs.strip():
+            return None
+    missing = [m for ok, m in ((title or fill, "a title (--title)"), (text.strip(), "what changed"),
+                               (PR_TESTED.search(text), "how it was tested"), (PR_OUTCOME.search(text), "the outcome it moves")) if not ok]
+    if not missing:
+        return None
+    how = "" if bodies or files else "No --body or --body-file is given. "
+    return decide("deny", PR_BODY_MSG.format(missing=", ".join(missing), how=how))
+
+
 def check_bash(cmd, cwd):
     cwd = cwd or os.getcwd()
     states = {}
@@ -1261,6 +1535,12 @@ def check_bash(cmd, cwd):
     body, heredocs = split_heredocs(cmd)
     if SECRET_REF.search(cmd) and secret_reach(body):
         return decide("deny", SECRET_MSG)
+    try:
+        printed = ("base64" in cmd or "openssl" in cmd) and prints_base64(cmd)
+    except Exception:
+        printed = False
+    if printed:
+        return decide("deny", ENCODED_MSG)
     for toks in segments(body):
         if toks[0] == "cd" and len(toks) > 1:  # `cd <repo> && git switch x` is judged in <repo>
             cwd = os.path.normpath(os.path.join(cwd, os.path.expanduser(toks[1])))
@@ -1316,6 +1596,13 @@ def check_bash(cmd, cwd):
             r = check_text(cmd, "PR text" if toks[1] == "pr" else "issue text")
             if r:
                 return r
+        if toks and toks[0] == "gh" and "create" in toks and gh_words(toks)[:2] == ["pr", "create"]:
+            try:
+                r = check_pr_body(toks[toks.index("create") + 1:], cwd, heredocs)
+            except Exception:
+                r = None
+            if r:
+                return r
         if sub == "config":
             key = config_write_key(rest)
             if key and SELF_MERGE_KEYS.fullmatch(key):
@@ -1334,6 +1621,12 @@ def check_bash(cmd, cwd):
                                       "rebased head and merges that PR head only.")
             if not solo:
                 return decide("ask", "merge-own: in a team repo a human merges the PR. Confirm with Fernando.")
+    try:
+        asks = "sudo" in cmd and runs_sudo(cmd)
+    except Exception:
+        asks = False
+    if asks:
+        return decide("ask", SUDO_MSG)
     try:   # last, so that a deny above is never hidden behind this ask; a bug in it allows
         bad = empty_var_path(cmd)
     except Exception:
@@ -1620,7 +1913,10 @@ def main(argv=None):
                         if d), None)
             r = hit and hit[1]
             if not r and path:
-                r = check_history_comment(tool, dict(ti, file_path=path), existing_text(path, cwd))
+                before = existing_text(path, cwd)
+                r = (check_history_comment(tool, dict(ti, file_path=path), before)
+                     or check_new_comment(tool, dict(ti, file_path=path), before)
+                     or check_rewrite(tool, dict(ti, file_path=path), before))
             if not r:
                 r = check_new_doc(tool, path, p, cwd)
             if not r:

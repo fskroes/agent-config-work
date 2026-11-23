@@ -6,7 +6,7 @@ Four sections are core and stay in this file: "How to work", "Task sizing", "Bra
 
 ## How to work (high-level mindset)
 
-The marginal cost of completeness is near zero with AI. Do the whole thing. Do it right. Do it with tests. Documentation is the code, its tests, its comments and the commit message. Do not create a Markdown file unless Fernando asks for one: `guard.py` rule `new-doc` enforces it. Do it so well that Fernando is genuinely impressed, not politely satisfied, actually impressed. Never offer to "table this for later" when the permanent solve is within reach. Never leave a dangling thread when tying it off takes five more minutes. Never present a workaround when the real fix exists. The standard isn't "good enough", it's "holy shit, that's done."
+The marginal cost of completeness is near zero with AI. Do the whole thing. Do it right. Do it with tests. Documentation is the code, its tests and the commit message. Do not create a Markdown file unless Fernando asks for one: `guard.py` rule `new-doc` enforces it. Do it so well that Fernando is genuinely impressed, not politely satisfied, actually impressed. Never offer to "table this for later" when the permanent solve is within reach. Never leave a dangling thread when tying it off takes five more minutes. Never present a workaround when the real fix exists. The standard isn't "good enough", it's "holy shit, that's done."
 
 Search before building. Test before shipping. Ship the complete thing. When Fernando asks for something, the answer is the finished product, not a plan to build it.
 
@@ -127,6 +127,7 @@ bash ~/.claude/scripts/worktree-guard.sh
 - No Edit or Write tool edit of a git config file, and `git clean -f` waits for confirmation like `git reset --hard`.
 - A path in `rm`, `rsync`, `cp` or `mv` must not become `/` or a folder at `/` when a variable in it is empty (`$2/`, `${DIR}/usr`). Guard it with `${VAR:?}`, or set it earlier in the same command.
 
+
 **Cleanup is a manual command, never part of setup.** Run `bash ~/.claude/scripts/worktree-cleanup.sh` from the shared checkout only when Fernando asks. `git worktree` admin commands from the shared checkout are allowed. To leave a worktree, `ExitWorktree` with `keep`.
 
 **Never:** edit or commit in the shared checkout, run `git switch` or `git checkout` there, commit a worktree directory, or share one branch between two sessions.
@@ -149,7 +150,7 @@ The context window is your only control over the model. Load the spec, the contr
 
 Three habits cut safety-filter false positives. All three come from Anthropic's Fable 5.1 guide, section "Reduce safeguard false positives":
 
-- Keep base64 out of the window. The guide says tools that return base64-encoded data "can trigger false positives, so removing them is the recommended fix". Decode to a file and read the part you need.
+- Keep base64 out of the window. The guide says tools that return base64-encoded data "can trigger false positives, so removing them is the recommended fix". Decode to a file and read the part you need. `guard.py` rule `base64` denies a command that prints base64 text.
 - For a lesser-known language, load its docs into the window before you work. The guide recommends giving the model "context about what the language is and how it works".
 - Ask for what you want to know: instead of "Does this program compile without errors?", ask "Are there any bugs in this program?"
 
@@ -180,15 +181,15 @@ Source: Anthropic, [Prompting Claude Fable 5.1](https://platform.claude.com/docs
 
 Scratch checks stay scratch: do not turn a quick check into an extra permanent test file. The tests that ship are the ones "Tests and evals" requires, no more.
 
-A code comment states a rule or a reason as a fact about the code. It never quotes who asked ("Fernando said never X", "as you asked"): that history goes in the commit message. `guard.py` rule `history-comment` enforces it.
+Add no new code comments: nothing checks a comment, and agents use one to justify a workaround. Rename or restructure the code so that it needs none, put the reason in the commit message, and turn a rule into a check. `guard.py` rule `new-comment` denies a new comment; its message names what passes. Fernando sets `git config agent.comments allow` for a repo that needs comments. There, rule `history-comment` still denies a comment that quotes who asked.
 
-Each follow-up names the file and line, what is wrong, and the fix you would make. This does not lower the bar in "How to work": the requested task still ships complete, tested, and documented. It keeps the diff to one reviewable change, and the follow-up list makes sure nothing you found gets lost. If a follow-up blocks the task, it is inside the scope; say so in the triage block and fix it.
+Each follow-up names the file and line, what is wrong, and the fix you would make. File each one with `python3 ~/.claude/scripts/followup.py file` (see `--help`): one `cleanup` issue per finding, with no duplicates. The report lists the issue URLs. A new check against a pattern files one issue for the old cases, with `--count N`. This does not lower the bar in "How to work": the requested task still ships complete, tested, and documented. It keeps the diff to one reviewable change, and the issues make sure nothing you found gets lost. If a follow-up blocks the task, it is inside the scope; say so in the triage block and fix it.
 
 "Never leave a dangling thread when tying it off takes five more minutes" in "How to work" is about threads inside the requested task. It never covers an unrequested fix next to the task, however small or quick. Size does not decide scope; the request does.
 
 Example. Task: "add CSV export to the report page". The export works, but you have not written the error message for an empty report yet. That is a dangling thread inside the task: finish it ("How to work" applies). While testing, you see the PDF export on the same page rounds totals wrong. That is next to the task, not in it: do not touch it, list it as a follow-up with file, line, and fix.
 
-Edit files surgically. Use a targeted edit, not a whole-file rewrite, unless the file is short or most of it changes. The guide (section "Prefer targeted edits over whole-file rewrites") says a rewrite usually gives the same file for more output tokens and time. A rewrite also makes the real change harder to find in review.
+Edit files surgically. Use a targeted edit, not a whole-file rewrite, unless the file is short or most of it changes. The guide (section "Prefer targeted edits over whole-file rewrites") says a rewrite usually gives the same file for more output tokens and time. A rewrite also makes the real change harder to find in review. `guard.py` rule `rewrite` denies a Write that keeps 80% of the lines of a file of 200 lines or more.
 
 ### Repo docs and code disagree: follow the code
 
@@ -202,8 +203,8 @@ Why: agents follow stale instruction files over the code. In arXiv [2610.30571](
 - What you WRITE still follows the rules below. "No new test needed" applies only to non-behavioral small changes (typo, copy, styling value); every behavior change ships its test.
 - Every feature ships with a test suite AND an eval suite, in the same commit. Not the next PR. If they are not in the diff, the work is not done.
 - Every bug fix ships with a test AND an eval that would have caught the bug, in the same diff. The regression test is the proof the bug is fixed. The eval is the proof the fix generalizes.
-- Every failure gets skillified: a hook, lint rule, verify check or skill that blocks it next time, logged with its date by `bash ~/.claude/scripts/log-change.sh '<item>' '<change>' '<metric>'`, which adds the row to `changes.md` through a PR (in an agent-config worktree, add the row to your own diff). Same day. Same session when possible.
-- Heavy test and build runs go through `python3 ~/.claude/scripts/capped_run.py -- <command>`: 6 GB memory cap on the whole process tree (the run reserves it from a 12 GB machine budget, first come first served, so small runs overlap and a run that does not fit waits; `--serial` is one run at a time; a capped run started inside a capped run keeps its own caps and does not queue), 900 s time cap. It stops every process of the tree at the end, also a test helper that `timeout` leaves behind. `guard.py` refuses the unwrapped command (rule `unbounded-test`). A test that needs more memory gets `--mem-gb N`; say why in the report.
+- Every failure gets skillified: a fix that blocks it next time, logged with its date by `bash ~/.claude/scripts/log-change.sh '<item>' '<change>' '<metric>'`, which adds the row to `changes.md` through a PR (in an agent-config worktree, add the row to your own diff). Same day. Same session when possible. Use the first fix that can hold it, in this order: the repo's code (an API, type or structure that makes the mistake impossible), a check in the repo (lint, test, `repo_check.py`), its `verify-<app>`, a `guard.py` rule, a skill, and a prose line here last. Write a prose rule for the case of the correction, not as a law for all cases. `prose-budget.tsv` refuses a new prose rule that does not replace or cut another one.
+- Heavy test and build runs go through `python3 ~/.claude/scripts/capped_run.py -- <command>`: a memory cap, a time cap and a machine memory budget (`--help` has the numbers). It stops every process of the tree at the end. `guard.py` refuses the unwrapped command (rule `unbounded-test`). A test that needs more memory gets `--mem-gb N`; say why in the report.
 - Two test lanes, different budgets:
   - **Gate tests**: deterministic, local, free, <2s. Run on every commit via pre-commit hook. Never flaky.
   - **Periodic evals**: paid (LLM calls), slower, quality-measuring. Run before ship and nightly. Allowed to be non-deterministic but must have a pass threshold.
@@ -297,10 +298,10 @@ Reporting a completion status is not the end of the task. Before the final repor
 
 Once a task is done, two things happen, no exceptions. This is the default End line from "Task sizing". Commit, push, and PR are one unit: unless Fernando's own words move the stop point (earlier, like "don't push yet", or further, like "merge when green"), all three happen. The report always happens. A task that changed no file (an answer, an assessment) has nothing to commit:
 
-1. **Commit, push the branch, open the PR.** Stage the work and write a clear commit message. Then resolve the base branch exactly as "Branching" does (never a bare `origin/main`), `git fetch origin`, `git rebase "$BASE"`, and stop if the rebase fails rather than pushing a half-rebased branch. Push with `git push -u origin HEAD` the first time, and `git push --force-with-lease --force-if-includes` on later rounds, since the rebase rewrote commits you already pushed. Open the PR with `gh pr create` (title, what changed, how it was tested, the measurable outcome). Don't wait to be asked. Print the PR URL in the final report. A human merges it; you do not, unless Fernando says so. The Safety and Branching rules apply.
+1. **Commit, push the branch, open the PR.** Stage the work and write a clear commit message. Then resolve the base branch exactly as "Branching" does (never a bare `origin/main`), `git fetch origin`, `git rebase "$BASE"`, and stop if the rebase fails rather than pushing a half-rebased branch. Push with `git push -u origin HEAD` the first time, and `git push --force-with-lease --force-if-includes` on later rounds, since the rebase rewrote commits you already pushed. Open the PR with `gh pr create` (title, what changed, how it was tested, the measurable outcome; `guard.py` rule `pr-body` denies a PR without them). Don't wait to be asked. Print the PR URL in the final report. A human merges it; you do not, unless Fernando says so. The Safety and Branching rules apply.
 2. **Report what to restart.** Tell Fernando exactly which service / system / program needs to be restarted for the change to take effect, with the full list of commands to run. If nothing needs restarting, say so explicitly.
 
-For restart commands that need `sudo`: never run them yourself. List them for Fernando to run, clearly marked as Fernando's to execute.
+For restart commands that need `sudo`: never run them yourself (`guard.py` rule `sudo` asks first). List them for Fernando to run, clearly marked as Fernando's to execute.
 
 ## Background jobs and backfills
 
