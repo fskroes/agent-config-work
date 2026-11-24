@@ -14,6 +14,16 @@ commit-msg stops a message with:
               a file whose name says verify, check, e2e, canary, harness, smoke, vectors or fixtures.
   llm-api     the staged diff adds a hosted LLM API host, SDK import or SDK dependency.
               Exempt: a line `LLM-API: <reason>` in the body of the message.
+  suppression the staged change adds a lint or type-check suppression of a rule that finds real bugs:
+              @ts-ignore, @ts-expect-error, @ts-nocheck, type: ignore, pyright: ignore, a bare noqa or
+              eslint-disable (every rule), noqa F401 or BLE001, eslint react-hooks/exhaustive-deps,
+              pylint broad-except, swiftlint force_cast, shellcheck SC2086, nolint errcheck, nosec,
+              rubocop Lint/. Style and size rules pass (hooks/suppression.py lists them): noqa E1-E5 W D N I
+              C90 PLR UP SIM, eslint max-len and @stylistic/, pylint C and R codes, swiftlint line_length,
+              shellcheck SC1090 SC1091 SC2016, rubocop Layout/ Style/ Metrics/ Naming/, prettier-ignore.
+              A rule that is not on that list counts as a bug rule. A kept or moved suppression passes.
+              Exempt: a line `Suppression: <rule> <reason>` in the body of the message. Runs also where
+              agent.comments is allow. From Cursor's pstack no-comments skill (Comment Sicko).
 pre-commit stops:
   binary      a new staged file that is a compiled output, archive, app bundle or model file, or is over
               5 MB, unless Git LFS tracks it. By extension: .o .a .so .dylib .dll .exe .class .jar .war
@@ -61,10 +71,12 @@ CHECK_RULES = {
     "llm-api": ("LLM access: local Claude Code", "agent-metrics/pyramid_metrics.py"),
     "binary": ("Never commit binaries", None),
     "cross-import": ("Build everything as independent services", "agent-metrics/pyramid_metrics.py"),
+    "suppression": ("Add no new code comments", "hooks/suppression.py"),
 }
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 IN_PROGRESS = ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply")
 LLM_API_LINE = re.compile(r"^[ \t]*llm-api:[ \t]*\S.*\S", re.I | re.M)
+SUPPRESSION_LINE = re.compile(r"^[ \t]*suppression:[ \t]*\S.*\S", re.I | re.M)
 SCISSORS = re.compile(r"^# -+ >8 -+$", re.M)
 LFS_POINTER = b"version https://git-lfs.github.com/spec/"
 WORD = re.compile(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])")
@@ -287,7 +299,7 @@ def commit_msg_problems(change, raw):
     text = clean_message(raw)
     body = text.split("\n", 1)[1] if "\n" in text else ""
     out = message_problems(text)
-    for check in (untested_problem, llm_problem):
+    for check in (untested_problem, llm_problem, suppression_problem):
         problem = check(change, body)
         if problem:
             out.append(problem)
@@ -401,6 +413,43 @@ def comment_report(repo, entries):
                        "and no docstrings: rename or restructure the code, put the reason in the commit message, turn "
                        "a rule into a check. Tool directives and license headers pass.")
     return out
+
+
+def new_suppressions(scan, path, old, new):
+    rules = load("suppression", "hooks/suppression.py")
+    try:
+        before = collections.Counter(" ".join(h.text.split()) for h in scan.scan(old, path)) if old else collections.Counter()
+        hits = scan.scan(new, path)
+    except Exception:
+        return []
+    out = []
+    for h in hits:
+        key = " ".join(h.text.split())
+        if before[key]:
+            before[key] -= 1
+            continue
+        out += [(h.line, rule) for rule in rules.guilty(h.text)]
+    return out
+
+
+def suppression_problem(change, body):
+    if not enabled("suppression") or SUPPRESSION_LINE.search(body) or squash_pending(change.repo):
+        return None
+    scan = load("comment_scan", "hooks/comment_scan.py")
+    found = []
+    for status, path, old_path, _ in change.files():
+        new = text_of(change.blob(path)) if scan.language(path) else None
+        if new is None:
+            continue
+        old = (text_of(change.old_blob(old_path)) or "") if status in "MRC" else ""
+        found += [(path, line, rule) for line, rule in new_suppressions(scan, path, old, new)]
+    if not found:
+        return None
+    path, line, rule = found[0]
+    more = f" and {len(found) - 1} more" if len(found) > 1 else ""
+    return (f"suppression: {path}:{line} silences {rule}{more}, a check that finds real bugs. Fix what it found, or "
+            "end the message with 'Suppression: <rule> <why the rule is wrong here>'. Style rules (E402, E501, "
+            "max-len, line_length, Layout/) pass.")
 
 
 def comment_problems(change):
