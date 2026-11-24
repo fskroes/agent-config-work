@@ -121,7 +121,7 @@ bash ~/.claude/scripts/worktree-guard.sh
 
 **Self-merge in a team repo: `git config agent.selfMerge verify`.** Fernando sets every `agent.*` key, never an agent. Open the PR, then run `bash ~/.claude/scripts/self-merge.sh` from the worktree: that script is the only way. Its `STOP:` means the PR waits for Fernando; say so, do not work around it. Where a merge deploys, the flag is Fernando's standing approval for that deploy.
 
-**Enforced by a hook.** `~/.claude/hooks/guard.py` holds most rules here; its docstring lists them. Codex does not run it, so the rules stay written. Three are written only here:
+**Enforced by a hook.** `~/.claude/hooks/guard.py` holds most rules here; its header lists them. Codex does not run it, so the rules stay written. Three are written only here:
 
 - No em dash, no banned phrase and no Copilot co-author line in commit, PR and issue text.
 - No Edit or Write tool edit of a git config file, and `git clean -f` waits for confirmation like `git reset --hard`.
@@ -181,7 +181,7 @@ Source: Anthropic, [Prompting Claude Fable 5.1](https://platform.claude.com/docs
 
 Scratch checks stay scratch: do not turn a quick check into an extra permanent test file. The tests that ship are the ones "Tests and evals" requires, no more.
 
-Add no new code comments: nothing checks a comment, and agents use one to justify a workaround. Rename or restructure the code so that it needs none, put the reason in the commit message, and turn a rule into a check. `guard.py` rule `new-comment` denies a new comment; its message names what passes. Fernando sets `git config agent.comments allow` for a repo that needs comments. There, rule `history-comment` still denies a comment that quotes who asked.
+Add no new code comments and no docstrings: nothing checks them, and agents use them to justify workarounds. Restructure the code until it needs none, put the reason in the commit message, turn a rule into a check. `guard.py` rule `new-comment` and the commit hook (`repo_check.py`, check `comment`) deny a new one, for every agent. Fernando sets `git config agent.comments allow` for a repo that needs them; `history-comment` still denies a comment that quotes who asked.
 
 Each follow-up names the file and line, what is wrong, and the fix you would make. File each one with `python3 ~/.claude/scripts/followup.py file` (see `--help`): one `cleanup` issue per finding, with no duplicates. The report lists the issue URLs. A new check against a pattern files one issue for the old cases, with `--count N`. This does not lower the bar in "How to work": the requested task still ships complete, tested, and documented. It keeps the diff to one reviewable change, and the issues make sure nothing you found gets lost. If a follow-up blocks the task, it is inside the scope; say so in the triage block and fix it.
 
@@ -379,3 +379,4 @@ These rules replace the parts of the text above that do not fit this machine.
 - `CLAUDE_CODE_SESSION_ID` is not set here. Where the text above uses `${CLAUDE_CODE_SESSION_ID:0:8}` (to fork db names, ports and container names), use `${COPILOT_AGENT_SESSION_ID:0:8}`. Never use an empty value: two sessions would share one database.
 - A path `~/.claude/skills/<name>` in the text above is `~/.copilot/skills/<name>` here.
 - Only the skills in `~/.copilot/skills` are installed here. They come from the agent-config-work clone. A skill that the text above names, but that is not installed, does not exist. Do the work by hand.
+- Old comments and docstrings in your repos stay. The guard and the commit hook (`~/.claude/scripts/repo_check.py`, check `comment`) refuse a new one in a file you edit or stage. Do not strip the old ones. Only the owner of a repo sets `git config agent.comments allow`.

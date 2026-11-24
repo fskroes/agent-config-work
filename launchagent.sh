@@ -1,22 +1,4 @@
 #!/usr/bin/env bash
-# Install the hourly update of this clone as the LaunchAgent com.fskroes.agent-config-work-update.
-# Every hour it fetches origin and moves this clone to origin/main, then runs ./install.sh when
-# HEAD changed. install.sh reuses the name saved by `./install.sh --name`. Idempotent. Run from
-# any folder:
-#   ./launchagent.sh                 write update.sh and the plist, load the LaunchAgent
-#   ./launchagent.sh --script-only   write update.sh only (install.sh runs this, so a new
-#                                    update.sh reaches a Mac with the next export)
-# Writes: ~/.local/share/agent-config-work-update/update.sh,
-#         ~/Library/LaunchAgents/com.fskroes.agent-config-work-update.plist
-# State and log: ~/.local/state/agent-config-work/{status,update.log,installed-sha}
-# This file is launchagent.sh of the export (agent-config: copilot/launchagent.sh).
-# AGENT_CONFIG_NO_LAUNCHCTL=1 writes both files and loads nothing (tests).
-#
-# The move to origin/main: a fast-forward when origin/main holds HEAD. When it does not, the
-# history of agent-config-work was rewritten (a force push that took a personal email out, for
-# example). The clone moves to origin/main only when it holds nothing of its own: no change to a
-# tracked file, and the files of HEAD are the files of a commit of origin/main (a rewrite that
-# only changes authors keeps the files). Anything else stops with a status that says to clone again.
 set -euo pipefail
 
 SCRIPT_ONLY=0
@@ -31,7 +13,6 @@ LABEL=com.fskroes.agent-config-work-update
 SCRIPT="$HOME/.local/share/agent-config-work-update/update.sh"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 STATE="$HOME/.local/state/agent-config-work"
-# The paths go as they are into a double-quoted line of update.sh and into the plist XML.
 for p in "$REPO" "$HOME"; do
   case "$p" in
     *[\"\$\`\\\&\<\>]*) echo "  STOP: the path $p holds one of \" \$ \` \\ & < >; move the clone or rename the folder" >&2; exit 1 ;;
@@ -40,8 +21,6 @@ done
 mkdir -p "$(dirname "$SCRIPT")" "$(dirname "$PLIST")" "$STATE"
 ((SCRIPT_ONLY)) || [[ -f "$STATE/name" ]] || echo "  note    no saved name: the files keep \"Fernando\". Run ./install.sh --name <your name> once."
 
-# Written next to the target and moved over it: a run of update.sh that is reading the old file
-# (install.sh runs --script-only from inside it) keeps reading the old file to its end.
 TMP="$SCRIPT.tmp.$$"
 cat > "$TMP" <<EOF
 #!/usr/bin/env bash
@@ -105,7 +84,6 @@ cat > "$TMP" <<EOF
 EOF
 mv -f "$TMP" "$PLIST"
 
-# The RunAtLoad run is skipped when launchctl is missing (tests, Linux).
 if command -v launchctl >/dev/null && [[ -z "${AGENT_CONFIG_NO_LAUNCHCTL:-}" ]]; then
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST"

@@ -1,30 +1,10 @@
 #!/usr/bin/env bash
-# The guard: am I about to write in the shared checkout? Run before the first write of
-# every task and after any compaction. Rules in AGENTS.md, "Branching".
-#
-#   worktree-guard.sh [path]
-#
-# Exit 0 and print OK <dir> when writing here is allowed (solo repo, or a linked worktree).
-# Exit 1 and print WRONG TREE when this is the shared checkout of a team repo.
-#
-# With a path, the checks run on the tree of that path. One more case: in a Home session
-# (the repo of the current folder has agent.home true), a path in another repo is OK only
-# when its work tree root is in this session's record, made by worktree-child.sh. Else it
-# is WRONG TREE. A path in the Home Repo itself is checked like any other. A path outside
-# any git work tree is OK: no rule covers it.
-#
-# In the shared checkout git-dir and git-common-dir are the same directory; in any
-# linked worktree they differ. No cd, no $HOME, so a symlinked path cannot fool it.
-# --path-format=absolute is load-bearing: from a subdirectory the common dir comes
-# back relative ("../.git"), the two stop matching, and the guard goes silent in
-# the shared checkout, which is the one direction that must never happen.
 set -u
-# agent_cfg: agent.<key>, else the old name claude.<key>. Next to this script, links followed.
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf %s "${BASH_SOURCE[0]}")")/agent-config.sh" \
   || { echo "STOP: agent-config.sh is missing next to this script, run install.sh again"; exit 1; }
 if [ $# -gt 0 ]; then
   P=$1
-  while [ ! -d "$P" ]; do   # a file or a path not made yet: its nearest folder
+  while [ ! -d "$P" ]; do
     [ "$P" = "$(dirname "$P")" ] && break
     P=$(dirname "$P")
   done
@@ -45,7 +25,7 @@ if [ $# -gt 0 ]; then
       exit 1
     fi
   fi
-  cd "$P" || exit 1   # the checks below run on the tree of the path
+  cd "$P" || exit 1
 fi
 if [ "$(agent_cfg mode)" = solo ]; then
   echo "OK $(git rev-parse --show-toplevel) (solo repo)"; exit 0

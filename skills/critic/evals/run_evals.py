@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Periodic evals for the critic skill. Paid: each run is headless local Claude Code
+USAGE = """Periodic evals for the critic skill. Paid: each run is headless local Claude Code
 (`claude -p`, model under test claude-opus-5-5 by default), never an LLM API. Grading is
 deterministic (regex and parse); no LLM judge is used, so there is no judge model to differ
 from the model under test.
@@ -134,7 +134,6 @@ CASES = {
 
 
 def bug_line_number(case):
-    """1-based line of the planted bug in ledger/pricing.py on the branch under review, or None."""
     c = CASES[case]
     if c["bug_line"] is None:
         return None
@@ -145,13 +144,10 @@ def bug_line_number(case):
 
 
 def build_repo(root, case):
-    """Make the repo, return the 1-based line of the planted bug in ledger/pricing.py (or None)."""
     c = CASES[case]
     ek.write_files(root, {"SPEC.md": SPEC, "ledger/__init__.py": "", "ledger/pricing.py": BASE_PRICING,
                           "checks/check_pricing.py": BASE_CHECKS, "checks/run.py": RUNNER})
     ek.git(root, "init", "-q", "-b", "main")
-    # agent.mode is the name. claude.mode too: the run uses the scripts installed in ~/.claude, which
-    # read only the old name on a machine that has not pulled the rename yet.
     ek.git(root, "config", "agent.mode", "solo")
     ek.git(root, "config", "claude.mode", "solo")
     ek.git(root, "add", "-A")
@@ -162,8 +158,6 @@ def build_repo(root, case):
     ek.git(root, "commit", "-q", "-m", "Pull the bulk discount into bulk_price")
     return bug_line_number(case)
 
-
-# ---- deterministic graders ---------------------------------------------------------------
 
 HEDGE = re.compile(r"\b(may|might|possibly|i suspect)\b", re.I)
 SEVERITY = re.compile(r"\[(high|medium|low)\]", re.I)
@@ -176,9 +170,6 @@ def verdict(text):
 
 
 def findings_section(text):
-    """Lines of the report from the verdict to the first closing section (blind comparison,
-    could not check, follow-ups). The 'Findings' heading is not required: the report's heading
-    wording varies, the `[high]` / `[medium]` / `[low]` tags are what the skill fixes."""
     out, on = [], False
     for line in text.splitlines():
         if not on:
@@ -191,7 +182,6 @@ def findings_section(text):
 
 
 def findings(text):
-    """[(severity, item text)]: an item runs from its tag line to the next tag or the counts line."""
     items = []
     for line in findings_section(text):
         tags = list(SEVERITY.finditer(line))
@@ -203,8 +193,6 @@ def findings(text):
 
 
 def names_line(item, filename, lo, hi):
-    """True when the item names `filename` as a whole file name (not the tail of check_pricing.py) and, in
-    the 80 characters after that mention, cites a line in [lo, hi]: `:N`, `:A-B`, `line N` or `lines A-B`."""
     for name in re.finditer(r"(?<![\w])" + re.escape(filename), item):
         window = item[name.end():name.end() + 80]
         spans = [(m.group(1), m.group(2)) for m in re.finditer(
@@ -222,7 +210,6 @@ def names_line(item, filename, lo, hi):
 
 
 def grade_report(case, text, bug_line=None):
-    """Problems found in one critic report; [] means the run passes."""
     problems = []
     want = CASES[case]["verdict"]
     got = verdict(text)
@@ -250,8 +237,6 @@ def grade_report(case, text, bug_line=None):
     return problems
 
 
-# ---- runs --------------------------------------------------------------------------------
-
 def make_case(case):
     def run(work, model, timeout, args):
         repo = os.path.join(work, "ledger")
@@ -259,8 +244,6 @@ def make_case(case):
         bug_line = build_repo(repo, case)
         prompt = PROMPT.format(branch=CASES[case]["branch"])
         ek.assert_blind(repo, prompt)
-        # Python cannot write __pycache__ into a read-only package folder, so the critic's own `python3 -c`
-        # calls leave the tree as they found it (an env variable would not reach the critic's shell).
         pkg_dirs = [os.path.join(repo, d) for d in ("ledger", "checks")]
         for d in pkg_dirs:
             os.chmod(d, 0o555)
@@ -279,7 +262,7 @@ def make_case(case):
 
 
 def main():
-    return ek.run_cases({name: make_case(name) for name in CASES}, __doc__)
+    return ek.run_cases({name: make_case(name) for name in CASES}, USAGE)
 
 
 if __name__ == "__main__":

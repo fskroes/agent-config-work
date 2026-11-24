@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Periodic eval for the large-task skill. Paid: one headless local Claude Code run
+USAGE = """Periodic eval for the large-task skill. Paid: one headless local Claude Code run
 (`claude -p`, model under test claude-opus-5-5 by default), never an LLM API. Grading is
 deterministic, from the stream-json transcript; no LLM judge is used.
 
@@ -109,15 +109,11 @@ large task. Do not ask questions; decide and carry on. Do not build a verify ski
 def build_repo(root):
     ek.write_files(root, FILES)
     ek.git(root, "init", "-q", "-b", "main")
-    # agent.mode is the name. claude.mode too: the run uses the scripts installed in ~/.claude, which
-    # read only the old name on a machine that has not pulled the rename yet.
     ek.git(root, "config", "agent.mode", "solo")
     ek.git(root, "config", "claude.mode", "solo")
     ek.git(root, "add", "-A")
     ek.git(root, "commit", "-q", "-m", "initial import")
 
-
-# ---- deterministic graders ---------------------------------------------------------------
 
 NOT_BUILDER_TYPES = {"reviewer", "explore", "reader", "plan", "runner", "claude-code-guide", "statusline-setup",
                      "web-fetch"}
@@ -125,25 +121,16 @@ NOT_BUILDER_START = re.compile(r"^\W*(critic|verifier|verify)\b", re.I)
 FIRST_LINE = re.compile(r"^[\s`$>*-]*(?:\d+[.)]\s*`?)?git switch -C\s+\S+\s+\S+")
 SWITCH = re.compile(r"git switch -C\s+\S+\s+\S+")
 FENCE = re.compile(r"^\s*```\w*\s*$")
-# A labelled line ("Reference: <target>", "Step 0 reference: <target>", "Frozen rubric: <target>") whose target is a
-# named thing or a path, not a refusal. The word alone ("no reference needed") does not count.
 REFERENCE_LINE = re.compile(r"^[\s*#>_-]*(?:step 0\b[^:\n]{0,20}[:.]\s*)?(?:frozen\s+)?(?:reference|rubric)(?:\s+(?:used|type))?"
                             r"[\s*_`]{0,4}:[\s*_`]*(?P<t>[^\n]+)", re.I | re.M)
 REFUSAL = re.compile(r"^\W*(none|n/?a|not (needed|required|applicable)|no |nothing|tbd|todo|\?)", re.I)
-# A line that names the budget ("Budget: 8 critic runs", "Step 0 budget: 6 runs", "... budget 8 critic runs",
-# "critic_log.py count --budget 6"), plus the lines right under it up to a blank line, so a "## Budget" heading
-# over "Critic runs: 6" counts.
 BUDGET_LINE = re.compile(r"^(?P<label>[^\n]*\bbudget\b[^\n]*)(?P<body>(?:\n[ \t]*\S[^\n]*){0,6})", re.I | re.M)
 BUDGET_HEADING = re.compile(r"^[\s*#>_-]*(?:step 0\b[^\n]{0,20})?budget[\s*_:]*$", re.I)
 COUNTED = re.compile(r"critic|verif|run", re.I)
-# The number is the budget: right after the word ("Budget: 8", "budget 8", "--budget 8"), right before what it
-# counts ("8 critic runs", "3 cold `claude` runs"), or right after that noun ("Critic runs: 6").
 RUN_WORDS = r"(?:cold|claude|`claude`|claude-alt|`claude-alt`|extra|opus|and|critic|verifier|verify)"
 BUDGET_NUMBER = re.compile(r"\bbudget\b[\s*_:=-]*[1-9]\d*\b"
                            rf"|\b[1-9]\d*\s+(?:{RUN_WORDS}\s+){{0,3}}runs?\b"
                            r"|\b(?:critic|verifier|verify)\s+runs?\s*[:=]\s*[1-9]", re.I)
-# A lead-in before the first command says it is first ("First commands, in order:"), and names no other command
-# and no negation ("Do not run", "then", "after").
 LEAD_IN = re.compile(r"^[\s*_#>-]*first\b", re.I)
 NOT_FIRST = re.compile(r"\b(?:not|never|don'?t|then|after|later|until|unless|skip|instead)\b|\bgit |[;&|]", re.I)
 NO_BUDGET = re.compile(r"\bno budget\b|\bbudget\b[\s*_:=-]*(?:is\s+)?(?:none|tbd|todo|unset|not set|unknown|n/?a)\b", re.I)
@@ -158,9 +145,6 @@ def has_reference(pre):
 
 
 def has_budget(pre):
-    """A budget line with a positive number and what it counts (critic, verifier or runs).
-    The number sits on the budget line itself, or the line is only a heading and the number is in the lines
-    under it."""
     for m in BUDGET_LINE.finditer(pre):
         label = m.group("label")
         if NO_BUDGET.search(label):
@@ -172,10 +156,6 @@ def has_budget(pre):
 
 
 def first_command_is_switch(prompt):
-    """The builder's first command is `git switch -C <unit-branch> <task-branch>`: at the start of the first line,
-    after a lead-in on that line ("First, in your worktree run: `git switch -C ...`"), or on the next line after a
-    lead-in line that ends with a colon ("First commands, in order:"). A lead-in starts with "First" and has no
-    other command and no negation."""
     lines = [l for l in str(prompt).splitlines() if l.strip() and not FENCE.match(l)][:2]
     if not lines:
         return False
@@ -202,7 +182,6 @@ def is_builder(inp):
 
 
 def lead_items(events):
-    """[(kind, payload)] in order: ('text', str) or ('tool', (name, input))."""
     out = []
     for b in ek.lead_blocks(events):
         if b.get("type") == "text":
@@ -213,8 +192,6 @@ def lead_items(events):
 
 
 def building_starts(items):
-    """Index of the first builder Agent call; None when no builder was launched. Edits the lead makes
-    before that (a verify script, a table it generates) are preparation, not the build the skill gates."""
     for i, (kind, p) in enumerate(items):
         if kind == "tool" and is_agent_call(p[0]) and is_builder(p[1]):
             return i
@@ -222,7 +199,6 @@ def building_starts(items):
 
 
 def written_before(items, end):
-    """Everything the lead wrote before index `end`: text, file contents, shell commands."""
     parts = []
     for kind, p in items[:end]:
         if kind == "text":
@@ -234,7 +210,6 @@ def written_before(items, end):
 
 
 def grade(events):
-    """Problems for one run; [] means pass."""
     items = lead_items(events)
     problems = []
     start = building_starts(items)
@@ -257,8 +232,6 @@ def grade(events):
 
 
 def make_stop():
-    """Stop once builders are launched (a few events after the last one, so sibling calls arrive),
-    or at the lead-call cap."""
     state = {"count": 0, "mark": 0}
 
     def stop(events):
@@ -286,7 +259,7 @@ def run(work, model, timeout, args):
 
 
 def main():
-    return ek.run_cases({"builders": run}, __doc__, default_runs=6, default_threshold=4 / 6,
+    return ek.run_cases({"builders": run}, USAGE, default_runs=6, default_threshold=4 / 6,
                         default_timeout=1500)
 
 

@@ -5,7 +5,7 @@
       {
         "type": "command",
         "bash": "python3 \"$HOME/.copilot/hooks/guard.py\" --format copilot || true",
-        "matcher": "Bash|Edit|Write",
+        "matcher": "Bash|bash|Edit|edit|Write|create|apply_patch",
         "timeoutSec": 10
       }
     ]

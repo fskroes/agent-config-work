@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a heavy test or build command with a memory cap, a time cap and a machine memory budget.
+USAGE = """Run a heavy test or build command with a memory cap, a time cap and a machine memory budget.
 
   python3 ~/.claude/scripts/capped_run.py [--mem-gb N] [--timeout S] [--wait S] [--serial] -- <command> [args...]
 
@@ -72,13 +72,11 @@ libproc; elsewhere RSS from ps is the fallback.
 import argparse, contextlib, ctypes, ctypes.util, errno, fcntl, glob, json, os, signal, subprocess, sys, time
 
 HOME = os.path.expanduser("~")
-# The default log is written only where install.sh made agent-metrics, like guard.py's DECISION_LOG:
-# a Copilot-only machine (install.sh --profile work) gets no ~/.claude/agent-metrics.
 METRICS_DIR = os.path.join(HOME, ".claude", "agent-metrics")
-STOP_GRACE = float(os.environ.get("CAPPED_RUN_GRACE", 5))   # seconds between TERM and KILL
+STOP_GRACE = float(os.environ.get("CAPPED_RUN_GRACE", 5))
 
 
-class RusageV2(ctypes.Structure):   # struct rusage_info_v2, <sys/resource.h>
+class RusageV2(ctypes.Structure):
     _fields_ = [("uuid", ctypes.c_uint8 * 16)] + [(n, ctypes.c_uint64) for n in (
         "user_time", "system_time", "pkg_idle_wkups", "interrupt_wkups", "pageins", "wired_size",
         "resident_size", "phys_footprint", "proc_start_abstime", "proc_exit_abstime",
@@ -94,7 +92,6 @@ except (OSError, AttributeError):
 
 
 def usage(pid):
-    """(phys_footprint bytes, start time) of pid, or None when it is gone or not readable."""
     if _libc is None:
         return None
     ri = RusageV2()
@@ -104,7 +101,6 @@ def usage(pid):
 
 
 def table():
-    """{pid: (ppid, pgid, rss bytes)} of every process on the machine."""
     out = subprocess.run(["ps", "-axo", "pid=,ppid=,pgid=,rss="], capture_output=True, text=True).stdout
     rows = {}
     for line in out.splitlines():
@@ -115,7 +111,6 @@ def table():
 
 
 def free_pct():
-    """kern.memorystatus_level: the percent of memory the kernel counts as free. None if unknown."""
     if _libc is None:
         return None
     v, n = ctypes.c_int(0), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))
@@ -125,7 +120,6 @@ def free_pct():
 
 
 def zombies(pids):
-    """The pids in pids that are zombies: dead, holding no memory, gone once their parent reaps them."""
     if not pids:
         return set()
     out = subprocess.run(["ps", "-o", "pid=,stat=", "-p", ",".join(map(str, pids))],
@@ -134,7 +128,6 @@ def zombies(pids):
 
 
 def same(pid, start):
-    """True while pid is the process we saw (a reused pid has another start time)."""
     u = usage(pid)
     if u is None:
         try:
@@ -143,20 +136,18 @@ def same(pid, start):
             return False
         except PermissionError:
             return True
-        return start is None   # no libproc: trust the pid
+        return start is None
     return start is None or u[1] == start
 
 
 class Tree:
-    """Every process that descends from the root or shares its process group, also after it is
-    reparented to launchd. A pid is kept with its start time, so a reused pid is never signalled."""
 
     def __init__(self, root):
         self.root, self.seen = root, {}
 
     def poll(self):
         rows = table()
-        fresh = {self.root} | {p for p in rows if rows[p][1] == self.root}   # pgid == root: setsid leader
+        fresh = {self.root} | {p for p in rows if rows[p][1] == self.root}
         fresh |= {p for p, s in self.seen.items() if p in rows and same(p, s)}
         while True:
             more = {p for p, (pp, _, _) in rows.items() if pp in fresh and p not in fresh}
@@ -169,7 +160,7 @@ class Tree:
             if p not in self.seen:
                 self.seen[p] = u[1] if u else None
             elif u and self.seen[p] is not None and u[1] != self.seen[p]:
-                continue   # pid reused by a stranger
+                continue
             total += u[0] if u else rows.get(p, (0, 0, 0))[2]
         return total
 
@@ -200,7 +191,6 @@ def reap(child):
 
 
 def stop(procs, pgid=None, child=None):
-    """TERM, wait, KILL, wait. Returns the pids that are still alive."""
     signal_all(procs, signal.SIGTERM, pgid)
     for sig, wait in ((signal.SIGKILL, STOP_GRACE), (None, 2.0)):
         end = time.time() + wait
@@ -225,10 +215,6 @@ def write_json(path, data):
 
 
 def reap_stale(state):
-    """Stop the tree in the state file of a capped run that is gone. Called by sweep (under the ledger
-    lock) and by the guardian (not under it, so a file may vanish between the read and the remove).
-    Returns (pids found alive, pids that could not be stopped); the state file stays while any
-    could not be stopped, so the next run tries again."""
     try:
         with open(state) as f:
             old = json.load(f)
@@ -250,12 +236,10 @@ def reap_stale(state):
 
 
 def guardian(r, w, state, log, ledger, wpid):
-    """Forked before the command starts. Exits when the wrapper writes to the pipe (a normal end);
-    stops the tree when the pipe closes without that (the wrapper died, also by SIGKILL)."""
     os.setsid()
     os.close(w)
     null = os.open(os.devnull, os.O_RDWR)
-    for fd in (0, 1, 2):   # an inherited stdout pipe would keep the tool call waiting for EOF
+    for fd in (0, 1, 2):
         os.dup2(null, fd)
     try:
         got = os.read(r, 1)
@@ -271,8 +255,6 @@ def guardian(r, w, state, log, ledger, wpid):
 
 
 def acquire(lockfile, end, exclusive):
-    """The machine lock: shared for every run (held for its whole life), exclusive for --serial.
-    Returns the fd, or None when it did not come free before the time `end`."""
     fd = os.open(lockfile, os.O_RDWR | os.O_CREAT, 0o644)
     op = (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB
     said = False
@@ -299,7 +281,6 @@ def acquire(lockfile, end, exclusive):
 
 @contextlib.contextmanager
 def ledger_lock(ledger):
-    """Exclusive flock on the ledger, held for milliseconds. Never sleep inside it, except in a stop."""
     fd = os.open(ledger + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -309,7 +290,6 @@ def ledger_lock(ledger):
 
 
 def read_ledger(ledger):
-    """{str(wrapper pid): {gb, start, cwd, cmd, since}} of the runs that hold a share of the budget."""
     try:
         with open(ledger) as f:
             data = json.load(f)
@@ -326,9 +306,6 @@ def release(ledger, pid):
 
 
 def sweep(state_dir, ledger):
-    """Called while holding the ledger lock. Stops the tree of every capped run whose wrapper is gone
-    (its state file names the wrapper; the file of an older version names none) and drops the share of
-    a dead run once its tree is stopped. Returns (pids found alive, pids that could not be stopped)."""
     stale, stuck = [], []
     for path in sorted(glob.glob(os.path.join(state_dir, "capped-run.tree*.json"))):
         try:
@@ -340,8 +317,6 @@ def sweep(state_dir, ledger):
             continue
         guard = None
         if not owner.get("pid"):
-            # The file of an older version names no owner, and that version holds LOCK_EX on the machine
-            # lock for its whole life: it is dead only if a shared lock can be taken. Keep it while reaping.
             guard = os.open(os.path.join(state_dir, "capped-run.lock"), os.O_RDWR | os.O_CREAT, 0o644)
             try:
                 fcntl.flock(guard, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -366,10 +341,6 @@ def sweep(state_dir, ledger):
 
 
 def admit(state_dir, ledger, gb, budget, end, entry):
-    """Reserve gb GB of the budget for this run, first come, first served. The run registers as a
-    waiter (entry + arrival time) and becomes a holder when it fits and no live waiter arrived before
-    it. Returns (status, stale pids, stuck pids, reserved GB); status is ok, timeout or stuck. A run
-    that fits nowhere (gb over the budget) reserves the whole budget, so it runs alone."""
     gb, said, stale, me = min(gb, budget), False, [], str(os.getpid())
     with ledger_lock(ledger):
         held = read_ledger(ledger)
@@ -381,7 +352,7 @@ def admit(state_dir, ledger, gb, budget, end, entry):
             stale += left
             held = read_ledger(ledger)
             mine = held.get(me)
-            if mine is None:   # swept away by a stale-pid mistake: register again, at the back
+            if mine is None:
                 mine = held[me] = dict(entry, gb=gb, waiting=True, arrived=time.time())
             used = sum(e["gb"] for e in held.values() if not e.get("waiting"))
             ahead = [k for k, e in held.items() if e.get("waiting") and k != me
@@ -407,7 +378,6 @@ def admit(state_dir, ledger, gb, budget, end, entry):
 
 
 def ram_gb():
-    """hw.memsize in GB, or None when unknown."""
     if _libc is not None:
         v, n = ctypes.c_uint64(0), ctypes.c_size_t(8)
         if _libc.sysctlbyname(b"hw.memsize", ctypes.byref(v), ctypes.byref(n), None, 0) == 0 and v.value:
@@ -419,8 +389,6 @@ def ram_gb():
 
 
 def outer_run(lockfile, ledger):
-    """The pid of the capped run that holds a share (or the old lock) and is an ancestor of this process,
-    or None. Both tests are needed: CAPPED_RUN_HOLDER alone can leak into an unrelated process."""
     try:
         pid = int(os.environ.get("CAPPED_RUN_HOLDER", ""))
     except ValueError:
@@ -458,7 +426,7 @@ def env_float(name, default):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
+    ap = argparse.ArgumentParser(description=USAGE.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--mem-gb", type=float, default=env_float("CAPPED_RUN_MEM_GB", 6),
                     help="stop the tree when its summed phys_footprint passes this; also the share of "
@@ -510,7 +478,7 @@ def main(argv=None):
         giveup("lock-wait", 75, time.time() - started)
         return 75
     fd = None
-    if status == "ok":   # admitted: the machine lock only waits for an older exclusive holder
+    if status == "ok":
         fd = acquire(lockfile, end, a.serial)
         if fd is None:
             release(ledger, os.getpid())
@@ -546,7 +514,7 @@ def main(argv=None):
     while True:
         fp = tree.poll()
         peak = max(peak, fp)
-        if not outer:   # the state file is the outer run's
+        if not outer:
             write_json(state, {"pid": os.getpid(), "wstart": wstart, "cmd": shown,
                                "procs": {str(p): s for p, s in tree.seen.items()}})
         rc = child.poll()
@@ -600,7 +568,7 @@ def main(argv=None):
         return code
     if not survivors:
         release(ledger, os.getpid())
-    os.write(w, b"d")   # a normal end: the guardian exits without touching the tree
+    os.write(w, b"d")
     os.close(w)
     os.close(fd)
     return code
