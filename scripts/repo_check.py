@@ -32,7 +32,9 @@ pre-commit stops:
               anything inside a .dSYM, .app, .mlpackage or .mlmodelc folder. Also a file that git sees as
               binary with another name whose content starts with a Mach-O, ELF or PE header. Images, fonts,
               PDFs and other assets under 5 MB pass. Track the rest with `git lfs track`. A file that HEAD
-              already holds is not checked.
+              already holds is not checked. A text file of 5 to 50 MB passes when the .gitattributes of the
+              commit it follows gives it the attribute large-text (data/journal/**/*.jsonl large-text), so
+              the attribute lands in its own commit first. A binary file never passes this way.
   cross-import  a new import of the inside of another service (services/A reaches services/B/...).
               Imports that HEAD already holds pass. Tests and evals may import the inside of another service.
               Use the contract or the API of B.
@@ -63,6 +65,7 @@ import tempfile
 HERE = os.path.dirname(os.path.realpath(__file__))
 CLAUDE = os.path.dirname(HERE)
 MAX_BYTES = 5_000_000
+MAX_TEXT_BYTES = 50_000_000
 MAX_SCAN_BYTES = 2_000_000
 RULES_FILE = "copilot-instructions.md"
 CHECK_RULES = {
@@ -207,6 +210,10 @@ class Change:
                 return True
         return (self.blob(path) or b"").startswith(LFS_POINTER)
 
+    def large_text(self, path):
+        out = git(self.repo, "check-attr", f"--source={self.old}", "large-text", "--", path) or ""
+        return out.strip().endswith(": set")
+
 
 def clean_message(text):
     cut = SCISSORS.search(text)
@@ -330,7 +337,9 @@ def binary_problems(change):
         why = artifact_kind(path, added == "-")
         if not why and added == "-" and (change.blob(path) or b"")[:4].startswith(EXEC_MAGIC):
             why = "an executable or library by its header"
-        if not why and size > MAX_BYTES:
+        if not why and size > MAX_TEXT_BYTES:
+            why = f"{size / 1_000_000:.1f} MB, over the 50 MB limit of a text file (50,000,000 bytes)"
+        if not why and size > MAX_BYTES and (added == "-" or not change.large_text(path)):
             why = f"{size / 1_000_000:.1f} MB, over the 5 MB limit (5,000,000 bytes)"
         if not why or change.lfs_tracked(path):
             continue
