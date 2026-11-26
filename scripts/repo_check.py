@@ -24,6 +24,16 @@ commit-msg stops a message with:
               A rule that is not on that list counts as a bug rule. A kept or moved suppression passes.
               Exempt: a line `Suppression: <rule> <reason>` in the body of the message. Runs also where
               agent.comments is allow. From Cursor's pstack no-comments skill (Comment Sicko).
+  temp-dir    the staged change adds a temp folder with no cleanup in the same function or file:
+              Python tempfile.mkdtemp( or TemporaryDirectory(delete=False) with no rmtree, atexit, addCleanup,
+              .cleanup() or ExitStack in the same function (a method: its class, so setUp and tearDown pair);
+              Node fs.mkdtemp or mkdtempSync with no rm, rmSync, rmdir or rimraf in the file; Swift
+              createDirectory in a file that uses temporaryDirectory, with no removeItem; shell mktemp -d with
+              no trap and rm in the file. A context manager (with TemporaryDirectory() as d), pytest tmp_path,
+              and mkdtemp followed by rmtree (in finally or not) pass, as does a creation line the file already
+              held and a call inside a string literal. Exempt: a line `Temp-dir: <reason>` in the body of the
+              message (the folder is removed by a caller, a reaper or the test runner). A temp folder that no
+              one removes is how $TMPDIR filled with 15 GB of verify-* folders.
 pre-commit stops:
   binary      a new staged file that is a compiled output, archive, app bundle or model file, or is over
               5 MB, unless Git LFS tracks it. By extension: .o .a .so .dylib .dll .exe .class .jar .war
@@ -75,11 +85,13 @@ CHECK_RULES = {
     "binary": ("Never commit binaries", None),
     "cross-import": ("Build everything as independent services", "agent-metrics/pyramid_metrics.py"),
     "suppression": ("Add no new code comments", "hooks/suppression.py"),
+    "temp-dir": ("a check in the repo (lint, test", None),
 }
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 IN_PROGRESS = ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply")
 LLM_API_LINE = re.compile(r"^[ \t]*llm-api:[ \t]*\S.*\S", re.I | re.M)
 SUPPRESSION_LINE = re.compile(r"^[ \t]*suppression:[ \t]*\S.*\S", re.I | re.M)
+TEMP_DIR_LINE = re.compile(r"^[ \t]*temp-dir:[ \t]*\S.*\S", re.I | re.M)
 SCISSORS = re.compile(r"^# -+ >8 -+$", re.M)
 LFS_POINTER = b"version https://git-lfs.github.com/spec/"
 WORD = re.compile(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])")
@@ -306,7 +318,7 @@ def commit_msg_problems(change, raw):
     text = clean_message(raw)
     body = text.split("\n", 1)[1] if "\n" in text else ""
     out = message_problems(text)
-    for check in (untested_problem, llm_problem, suppression_problem):
+    for check in (untested_problem, llm_problem, suppression_problem, temp_dir_problem):
         problem = check(change, body)
         if problem:
             out.append(problem)
@@ -459,6 +471,146 @@ def suppression_problem(change, body):
     return (f"suppression: {path}:{line} silences {rule}{more}, a check that finds real bugs. Fix what it found, or "
             "end the message with 'Suppression: <rule> <why the rule is wrong here>'. Style rules (E402, E501, "
             "max-len, line_length, Layout/) pass.")
+
+
+PY_TEMP = re.compile(r"(?<![\w.])(?:tempfile\.)?mkdtemp\s*\(|\bTemporaryDirectory\s*\([^)]*\bdelete\s*=\s*False")
+PY_CLEAN = re.compile(r"\brmtree\b|\batexit\b|\baddCleanup\b|\baddfinalizer\b|\.cleanup\s*\(|\bExitStack\b|\bos\.rmdir\b|\.rmdir\s*\(|\bremovedirs\b|\bweakref\.finalize\b")
+JS_TEMP = re.compile(r"\bmkdtemp(?:Sync)?\s*\(")
+JS_CLEAN = re.compile(r"(?<![\w])(?:rm|rmSync|rmdir|rmdirSync)\s*\(|\brimraf\b|\bremoveSync\s*\(|\bemptyDirSync\s*\(")
+SWIFT_TEMP = re.compile(r"\bcreateDirectory\s*\(")
+SWIFT_TEMP_DIR = re.compile(r"\btemporaryDirectory\b|\bNSTemporaryDirectory\b")
+SWIFT_CLEAN = re.compile(r"\bremoveItem\s*\(")
+SH_TEMP = re.compile(r"\bmktemp\b[^|;&\n]*?(?:\s-[A-Za-z]*d[A-Za-z]*(?=[\s)\"';]|$)|\s--directory\b)")
+SH_TRAP = re.compile(r"^\s*trap\b", re.M)
+SH_RM = re.compile(r"\brm\s+-[A-Za-z]*[rR]|\brmdir\b")
+TEMP_PY_EXT = {".py"}
+TEMP_JS_EXT = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
+TEMP_SH_EXT = {".sh", ".bash", ".zsh"}
+SHEBANG = re.compile(r"^#!.*\b(?:ba|z|da)?sh\b")
+
+
+def in_string(line, pos):
+    quote = None
+    i = 0
+    while i < pos:
+        c = line[i]
+        if quote:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in "\"'`":
+            quote = c
+        i += 1
+    return quote is not None
+
+
+def temp_language(path, text):
+    ext = os.path.splitext(path)[1].lower()
+    if ext in TEMP_PY_EXT:
+        return "py"
+    if ext in TEMP_JS_EXT:
+        return "js"
+    if ext == ".swift":
+        return "swift"
+    if ext in TEMP_SH_EXT or (not ext and SHEBANG.match(text)):
+        return "sh"
+    return None
+
+
+def py_scope(lines, index):
+    def indent(s):
+        return len(s) - len(s.lstrip())
+
+    def parent(i):
+        need = indent(lines[i])
+        for j in range(i - 1, -1, -1):
+            if lines[j].strip() and indent(lines[j]) < need and re.match(r"\s*(?:async\s+def|def|class)\b", lines[j]):
+                return j
+        return None
+
+    start, node = None, parent(index)
+    while node is not None and re.match(r"\s*(?:async\s+def|def)\b", lines[node]):
+        start = node
+        node = parent(node)
+    if node is not None:
+        start = node
+    if start is None:
+        return 0, len(lines)
+    end = start + 1
+    while end < len(lines) and (not lines[end].strip() or indent(lines[end]) > indent(lines[start])):
+        end += 1
+    return start, end
+
+
+def temp_sites(lang, text):
+    lines = text.splitlines()
+    swift_ok = lang == "swift" and SWIFT_TEMP_DIR.search(text)
+    pattern = {"py": PY_TEMP, "js": JS_TEMP, "sh": SH_TEMP, "swift": SWIFT_TEMP}[lang]
+    out = []
+    for n, line in enumerate(lines):
+        code = line.lstrip()
+        if code.startswith(("#", "//", "*", "/*")) and not (lang == "sh" and code.startswith("#!")):
+            continue
+        if lang == "swift" and not swift_ok:
+            continue
+        for hit in pattern.finditer(line):
+            if lang != "sh" and in_string(line, hit.start()):
+                continue
+            if re.match(r"\s*(?:async\s+)?def\s", line) or re.match(r"\s*(?:async\s+)?function\s", line):
+                continue
+            out.append(n)
+            break
+    return lines, out
+
+
+def temp_cleaned(lang, lines, index, text):
+    if lang == "py":
+        start, end = py_scope(lines, index)
+        return bool(PY_CLEAN.search("\n".join(lines[start:end])))
+    if lang == "js":
+        return bool(JS_CLEAN.search(text))
+    if lang == "swift":
+        return bool(SWIFT_CLEAN.search(text))
+    return bool(SH_TRAP.search(text) and SH_RM.search(text))
+
+
+def new_temp_dirs(path, old, new):
+    lang = temp_language(path, new)
+    if not lang:
+        return []
+    lines, sites = temp_sites(lang, new)
+    before = collections.Counter()
+    if old:
+        old_lines, old_sites = temp_sites(lang, old)
+        before = collections.Counter(" ".join(old_lines[n].split()) for n in old_sites)
+    out = []
+    for n in sites:
+        key = " ".join(lines[n].split())
+        if before[key]:
+            before[key] -= 1
+        elif not temp_cleaned(lang, lines, n, new):
+            out.append((n + 1, lines[n].strip()[:60]))
+    return out
+
+
+def temp_dir_problem(change, body):
+    if not enabled("temp-dir") or TEMP_DIR_LINE.search(body) or squash_pending(change.repo):
+        return None
+    found = []
+    for status, path, old_path, _ in change.files():
+        new = text_of(change.blob(path))
+        if new is None:
+            continue
+        old = (text_of(change.old_blob(old_path)) or "") if status in "MRC" else ""
+        found += [(path, n, text) for n, text in new_temp_dirs(path, old, new)]
+    if not found:
+        return None
+    path, n, text = found[0]
+    more = f" and {len(found) - 1} more" if len(found) > 1 else ""
+    return (f"temp-dir: {path}:{n} creates a temp folder ('{text}'){more} with no cleanup in the same function or file. "
+            "Use 'with TemporaryDirectory() as d' or pytest tmp_path, or remove it in finally, atexit, addCleanup, "
+            "a trap or fs.rm, or end the message with 'Temp-dir: <who removes it>'.")
 
 
 def comment_problems(change):
