@@ -45,7 +45,7 @@ git worktree list --porcelain | awk '
         [ "$st" = "!!" ] && { [ -L "$n" ] || [ -d "$n" ]; } && continue
       fi
       if [ "$st" = "!!" ]; then
-        [[ "$f" =~ (^|/)(__pycache__|\.pytest_cache|\.build|\.venv)/ ]] && continue
+        [[ "$f" =~ (^|/)(__pycache__|\.pytest_cache|\.ruff_cache|\.build|\.venv)/ ]] && continue
         [[ "$f" == */ ]] && [ -z "$(find "$w/$f" ! -type d -print 2>/dev/null | head -1)" ] && continue
       fi
       left="$left${left:+$'\n'}$f"
