@@ -128,7 +128,7 @@ bash ~/.claude/scripts/worktree-guard.sh
 - A path in `rm`, `rsync`, `cp` or `mv` must not become `/` or a folder at `/` when a variable in it is empty (`$2/`, `${DIR}/usr`). Guard it with `${VAR:?}`, or set it earlier in the same command.
 
 
-**Cleanup is a manual command, never part of setup.** Run `bash ~/.claude/scripts/worktree-cleanup.sh` from the shared checkout only when Fernando asks. `git worktree` admin commands from the shared checkout are allowed. To leave a worktree, `ExitWorktree` with `keep`.
+**Cleanup is automatic, never part of setup.** `reaper.py` runs daily and removes expired agent folders, keeping unsaved work. `worktree-cleanup.sh` does one repo now. `git worktree` admin commands are allowed. To leave a worktree, `ExitWorktree` with `keep`.
 
 **Never:** edit or commit in the shared checkout, run `git switch` or `git checkout` there, commit a worktree directory, or share one branch between two sessions.
 

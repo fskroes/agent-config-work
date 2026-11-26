@@ -75,6 +75,13 @@ Rules (each one names the CLAUDE.md section it enforces):
                                                                               ("Context window")
   rewrite           a Write over an existing file of 200 lines or more that keeps 80% or more of its non-blank
                     lines: Edit changes the lines that differ                 ("Scope")
+  offload           on a production host only (git config agent.offload deny, set --global by Fernando): a Workflow
+                    call, an Agent call with isolation "worktree" or "remote", a delegate_task with isolation
+                    "worktree", a t3_thread_launch that makes a worktree, a create_threads batch of 3 or more,
+                    or worktree-child.sh --variant. Calls aimed at another T3 environment pass. The message names
+                    the cloud routine alternative (RemoteTrigger). git config agent.offload allow in a repo lifts
+                    it there; Fernando sets both values, never an agent. Free disk and the number of live worktrees are not read: parallel calls
+                    in one message would all pass a count taken before any of them starts
   pr-body           gh pr create with no body or with --fill, or a body that does not say how it was tested
                     and what outcome it moves                                 ("After every task")
 """
@@ -96,11 +103,11 @@ LIVE_EDIT_ROOTS = tuple(os.path.join(HOME, d) + os.sep for d in
 BANNED_PHRASES = ("here's the kicker", "here's the thing", "plot twist", "let me break this down",
                   "the bottom line", "make no mistake")
 MAIN = ("main", "master")
-SELF_MERGE_KEYS = re.compile(r"(agent|claude)(\.(selfmerge|selfmergeexclude|selfmergemethod|verifycmd|testcmd|verify|home|cleanup|cleanuphome|comments))?",
+SELF_MERGE_KEYS = re.compile(r"(agent|claude)(\.(selfmerge|selfmergeexclude|selfmergemethod|verifycmd|testcmd|verify|home|cleanup|cleanuphome|comments|offload))?",
                              re.I)
 SELF_MERGE_CONFIG = ("self-merge-config: Fernando sets agent.selfMerge, verifyCmd, testCmd, selfMergeExclude, "
-                     "selfMergeMethod, verify, home, cleanup, cleanupHome and comments, never an agent. They decide what merges without Fernando, "
-                     "which repos need a verify skill, which repo is the Home Repo, where cleanup issues go and which repo may hold code comments. The old names claude.<key> count too. Give Fernando the git config command to run with the ! prefix.")
+                     "selfMergeMethod, verify, home, cleanup, cleanupHome, comments and offload, never an agent. They decide what merges without Fernando, "
+                     "which repos need a verify skill, which repo is the Home Repo, where cleanup issues go and which repo may hold code comments and whether heavy agent work may run on a production host. The old names claude.<key> count too. Give Fernando the git config command to run with the ! prefix.")
 GH_VALUE_FLAGS = ("-R", "--repo", "--hostname")
 CHANGES_LOG = os.sep + os.path.join("claude", "agent-metrics", "changes.md")
 CHANGES_LOG_MSG = ("changes-log: changes.md is in the shared checkout of agent-config. A row written here is never "
@@ -1789,6 +1796,71 @@ def check_fresh_session(p):
     return decide("deny", FRESH_SESSION_MSG.format(k=ctx // 1000)) if ctx and ctx > FRESH_SESSION_TOKENS else None
 
 
+OFFLOAD_AGENT_TOOLS = ("Agent", "Task")
+OFFLOAD_ISOLATIONS = ("worktree", "remote")
+OFFLOAD_THREADS = 3
+T3_ENVIRONMENT_FILE = os.path.join(HOME, ".t3", "userdata", "environment-id")
+WORKTREE_VARIANT = re.compile(r"(^|[;&|(\n])\s*(\w+=\S*\s+)*(env\s+)?((ba|z)?sh\s+(-\w+\s+)*)?(\S*/)?worktree-child\.sh\b[^;&|\n]*--variant\b",
+                              re.M)
+OFFLOAD_MSG = ("offload: {what} is heavy agent work, and this machine is a production host (git config "
+               "agent.offload deny): worktrees fill its disk and builders compete with production for RAM. "
+               "Run it in the cloud instead: "
+               "RemoteTrigger action create (body: name, enabled false, clear_mcp_connections true, job_config.ccr = "
+               "environment_id env_01KjEkVJ78E6ZbUbLSWCUhGw, events = one user message with the unit prompt, session_context = "
+               "sources [git_repository url of the repo], allowed_tools, model), then action run with the returned id, "
+               "then action get_run_log with the session_id. The VM is Linux, 4 CPU, 15 GB RAM, 60 GB disk; it clones "
+               "the repo in 2 s and the builder pushes a branch. Exact body and limits: ~/.claude/skills/large-task/SKILL.md, "
+               "section 'Offload from a production host'. Work that needs macOS builds or local secrets runs one builder at a time "
+               "in your own session worktree. Fernando lifts this for a repo with: git config agent.offload allow."
+               )
+
+
+def local_t3_environment():
+    try:
+        with open(T3_ENVIRONMENT_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def runs_elsewhere(target):
+    env = (target or {}).get("environmentId") if isinstance(target, dict) else None
+    return bool(env) and env != local_t3_environment()
+
+
+def offload_what(tool, ti):
+    if tool == "Workflow":
+        return "a Workflow run"
+    if tool in OFFLOAD_AGENT_TOOLS and ti.get("isolation") in OFFLOAD_ISOLATIONS:
+        return f"an Agent call with isolation \"{ti['isolation']}\""
+    if tool == "mcp__t3-code__delegate_task" and ti.get("isolation") == "worktree" and not runs_elsewhere(ti.get("target")):
+        return "a delegate_task call with isolation \"worktree\""
+    if tool == "mcp__t3-code__t3_thread_launch":
+        strategy = ti.get("workspaceStrategy")
+        env = ti.get("environmentId")
+        local = not env or env == local_t3_environment()
+        if local and isinstance(strategy, dict) and strategy.get("type") == "worktree":
+            return "a t3_thread_launch call that makes a worktree"
+    if tool == "mcp__t3-code__create_threads":
+        threads = ti.get("threads")
+        local = [t for t in threads if not runs_elsewhere(t.get("target"))] if isinstance(threads, list) else []
+        if len(local) >= OFFLOAD_THREADS:
+            return f"a create_threads batch of {len(local)} threads"
+    if tool == "Bash" and WORKTREE_VARIANT.search(str(ti.get("command", ""))):
+        return "a tournament builder worktree (worktree-child.sh --variant)"
+    return None
+
+
+def check_offload(p):
+    tool, ti = p.get("tool_name", ""), p.get("tool_input") or {}
+    if not (tool == "Workflow" or tool in OFFLOAD_AGENT_TOOLS or tool.startswith("mcp__t3-code__") or tool == "Bash"):
+        return None
+    what = offload_what(tool, ti)
+    if not what or (agent_config.get("offload", p.get("cwd") or os.getcwd()) or "").strip().lower() != "deny":
+        return None
+    return decide("deny", OFFLOAD_MSG.format(what=what))
+
+
 def copilot_payload(p):
     sid = p.get("session_id")
     if p.get("transcript_path") or p.get("agent_id") or not isinstance(sid, str) or not re.fullmatch(r"[\w-]+", sid):
@@ -1838,7 +1910,7 @@ def main(argv=None):
         if tool == "Bash":
             r = check_bash(ti.get("command", ""), where)
             if not r:
-                r = check_subagent_wait(p, copilot) or check_fresh_session(p)
+                r = check_subagent_wait(p, copilot) or check_fresh_session(p) or (None if copilot else check_offload(p))
         elif tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
             path = ti.get("file_path") or ti.get("notebook_path") or ti.get("path")
             named = any(k in ti for k in ("file_path", "notebook_path", "path"))
@@ -1862,6 +1934,8 @@ def main(argv=None):
                 where = os.path.dirname(os.path.join(cwd or "", hit[0]))
                 while where and not os.path.isdir(where):
                     where = os.path.dirname(where)
+        elif not copilot and (tool == "Workflow" or tool in OFFLOAD_AGENT_TOOLS or tool.startswith("mcp__t3-code__")):
+            r = check_offload(p)
         else:
             r = None
     except Exception:
