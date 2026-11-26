@@ -5,7 +5,14 @@ set -u
 REPO_PATH=${1:-}
 SLUG=${2:-}
 stop() { echo "STOP: $*"; exit 1; }
-[ -n "$REPO_PATH" ] && [ -n "$SLUG" ] || stop "usage: worktree-child.sh <repo-path> <slug>"
+USAGE="usage: worktree-child.sh <repo-path> <slug> [--variant <a-z0-9, up to 8>]"
+[ -n "$REPO_PATH" ] && [ -n "$SLUG" ] || stop "$USAGE"
+VARIANT=
+if [ $# -gt 2 ]; then
+  [ $# -eq 4 ] && [ "$3" = --variant ] || stop "$USAGE"
+  VARIANT=$4
+  case "$VARIANT" in ''|*[!a-z0-9]*|?????????*) stop "$USAGE" ;; esac
+fi
 
 SRC=${BASH_SOURCE[0]}
 while [ -L "$SRC" ]; do
@@ -48,9 +55,36 @@ if [ -z "$WT" ] && printf '%s\n' "$OUT" | grep -q '^SOLO '; then WT=$CHILD_ROOT;
 [ -n "$WT" ] && [ -d "$WT" ] || stop "worktree-setup.sh gave no worktree path: $OUT"
 WT=$(cd "$WT" && pwd -P)
 
+if [ -n "$VARIANT" ]; then
+  BR=$(git -C "$WT" branch --show-current)
+  [ -n "$BR" ] || stop "$WT has no branch checked out, a variant cannot branch from it"
+  if [ "$WT" = "$CHILD_ROOT" ]; then
+    SID8=${KEY:0:8}
+    VWT="$HOME/.claude-worktrees/$(basename "$CHILD_ROOT")-$(printf %s "$CHILD_ROOT" | cksum | cut -d' ' -f1)/$SID8-$VARIANT"
+  else
+    VWT="$WT-$VARIANT"
+  fi
+  VBR="$BR-$VARIANT"
+  if [ -d "$VWT" ] && git -C "$WT" worktree list --porcelain | grep -qFx "worktree $(cd "$VWT" && pwd -P)"; then
+    echo "re-attaching to variant worktree $VWT"
+  elif [ -e "$VWT" ]; then
+    stop "$VWT exists and is no worktree of $CHILD_ROOT, move it away first"
+  elif git -C "$WT" show-ref -q --verify "refs/heads/$VBR"; then
+    git -C "$WT" worktree add -q "$VWT" "$VBR" >/dev/null 2>&1 || stop "git worktree add $VWT $VBR failed (is $VBR checked out elsewhere?)"
+    echo "variant $VARIANT: reusing branch $VBR"
+  else
+    mkdir -p "$(dirname "$VWT")" || stop "cannot make $(dirname "$VWT")"
+    git -C "$WT" worktree add -q -b "$VBR" "$VWT" HEAD >/dev/null 2>&1 || stop "git worktree add -b $VBR $VWT failed"
+    echo "variant $VARIANT: branch $VBR from $BR at $(git -C "$WT" rev-parse --short HEAD)"
+  fi
+  VWT=$(cd "$VWT" && pwd -P)
+fi
+
 REC="$HOME_COMMON/claude-child-worktrees/$KEY"
 mkdir -p "$HOME_COMMON/claude-child-worktrees" || stop "cannot write in $HOME_COMMON"
 touch "$REC"
-grep -qxF "$WT" "$REC" || printf '%s\n' "$WT" >> "$REC"
+for W in "$WT" ${VARIANT:+"$VWT"}; do
+  grep -qxF "$W" "$REC" || printf '%s\n' "$W" >> "$REC"
+done
 [ -z "${T3CODE_THREAD_ID:-}" ] || echo "THREAD-TITLE $(basename "$CHILD_ROOT")"
-echo "CHILD $WT"
+echo "CHILD ${VWT:-$WT}"

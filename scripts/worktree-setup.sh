@@ -17,6 +17,7 @@ done
 [ -n "$BASE" ] || { echo "STOP: cannot find a base branch"; exit 1; }
 
 if [ "$(agent_cfg mode)" = solo ]; then
+  [ "$(git branch --show-current)" = "$SLUG" ] && { echo "SOLO $SLUG"; exit 0; }
   git status --porcelain | grep -q . && { echo "STOP: commit or stash first"; exit 1; }
   git switch -qc "$SLUG" "$BASE" || exit 1
   echo "SOLO $SLUG"; exit 0

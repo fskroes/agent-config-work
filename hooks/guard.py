@@ -17,7 +17,8 @@ A Copilot sub-agent call carries `agent_id`, like Claude Code's.
 Rules (each one names the CLAUDE.md section it enforces):
   shared-checkout   Edit/Write in the shared checkout of a team-mode repo   ("Branching")
   home-child        Edit/Write/MultiEdit/NotebookEdit in a child repo, by a session that runs in a Home Repo,
-                    outside the worktrees that session made with worktree-child.sh. Files outside a git
+                    outside the worktrees that session made with worktree-child.sh (a repo nested in one
+                    of them, such as atlas studio/, counts as inside it). Files outside a git
                     work tree and a Copilot sub-agent call are not gated   ("Repos", root CLAUDE.md)
   changes-log       Edit/Write to agent-config's changes.md in a shared checkout, also through ~/.claude,
                     or Bash that names it other than to read it: log-change.sh does it ("Tests and evals")
@@ -328,9 +329,10 @@ def check_home_child(path, p, copilot=False):
                 recorded = {os.path.realpath(x.strip()) for x in f if x.strip()}
         except OSError:
             recorded = set()
-        if os.path.realpath(top) in recorded:
+        top = os.path.realpath(top)
+        if any(top == r or top.startswith(r.rstrip(os.sep) + os.sep) for r in recorded):
             return None
-        return decide("deny", f"home-child: {absp} is in another repo ({os.path.realpath(top)}) and this Home session "
+        return decide("deny", f"home-child: {absp} is in another repo ({top}) and this Home session "
                               "has no worktree there. Run: bash ~/.claude/scripts/worktree-child.sh <repo> <slug>, "
                               "then edit through the path it prints.")
     except Exception:

@@ -18,8 +18,14 @@ if [ $# -gt 0 ]; then
       SID=${CLAUDE_CODE_SESSION_ID:-${COPILOT_AGENT_SESSION_ID:-}}
       KEY=$(printf %s "$SID" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
       TOP=$(cd "$TOP" && pwd -P)
-      if [ -n "$KEY" ] && grep -qxF "$TOP" "$HOME_COMMON/claude-child-worktrees/$KEY" 2>/dev/null; then
-        echo "OK $TOP (child worktree)"; exit 0
+      if [ -n "$KEY" ] && [ -f "$HOME_COMMON/claude-child-worktrees/$KEY" ]; then
+        while IFS= read -r R; do
+          [ -n "$R" ] || continue
+          case "$TOP" in
+            "$R") echo "OK $TOP (child worktree)"; exit 0 ;;
+            "${R%/}"/*) echo "OK $TOP (repo nested in child worktree $R)"; exit 0 ;;
+          esac
+        done < "$HOME_COMMON/claude-child-worktrees/$KEY"
       fi
       echo "WRONG TREE: $TOP is in another repo and this session has no worktree there, run: bash ~/.claude/scripts/worktree-child.sh $TOP <slug>"
       exit 1
