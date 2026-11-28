@@ -19,6 +19,7 @@ Next to the reference, write the budget: the number of critic and verifier runs 
 
 No reference, no build. If you can't write down what "wowed" means for this task, that's a Confusion Protocol stop.
 
+
 **Offload from a production host.** On a host where Fernando set `git config --global agent.offload deny`, the `offload` rule in guard.py denies a Workflow call, an Agent call with `isolation: "worktree"` or `"remote"`, a `delegate_task` with `isolation: "worktree"`, a `t3_thread_launch` that makes a worktree, a `create_threads` batch of 3 or more, and `worktree-child.sh --variant`. Light work is not touched: one session in its own worktree, and Agent calls with no isolation (critics, readers, runners). The rule does not read free disk or the number of live worktrees: parallel calls in one message all pass a count taken before any of them starts, and a disk threshold lets fan-out come back each time the reaper frees space. Fernando lifts it per repo with `git config agent.offload allow`.
 
 

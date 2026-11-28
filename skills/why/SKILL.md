@@ -60,6 +60,8 @@ If the target is vague ("why do we do it this way?" with no clear referent), mak
 
 ## Step 2. Establish the Code Anchor
 
+First run `python3 ~/.claude/scripts/decisions.py why <term> --repo <repo>` with the constant, flag or file name: a row it prints is the recorded reason (cite its file, line or commit, and ts), and exit 1 means no run logged one.
+
 Before spawning investigators, anchor the investigation in concrete code. You need:
 
 - The relevant file path(s) and line range(s)
