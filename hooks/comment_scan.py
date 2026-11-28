@@ -81,6 +81,8 @@ def language(path, text=None):
 
 _ID = r"[\w\-./@]+"
 _CODE = r"[A-Za-z]+\d*"
+_FLAG = r"[\w\-]+(?:=[\w\-.]+)?"
+_SC = r"SC\d+"
 
 
 def _list(item):
@@ -92,7 +94,7 @@ ALLOWED_COMMENT = re.compile("|".join((
     rf"noqa(?::\s*{_list(_CODE)})?", r"type:\s*ignore(?:\[[\w\-, ]+\])?", r"type:\s*[A-Za-z_][\w.\[\], |\"']*",
     r"pragma:\s*(?:no\s+(?:cover|branch)|nocover|nobranch)",
     rf"pylint:\s*(?:skip-file|(?:disable|enable|disable-next|disable-line)\s*=\s*{_list(_ID)})",
-    rf"(?:mypy|pyright):\s*{_list(r'[\w\-]+(?:=[\w\-.]+)?')}",
+    rf"(?:mypy|pyright):\s*{_list(_FLAG)}",
     r"fmt:\s*(?:off|on|skip)", r"isort:\s*[\w\-]+",
     rf"eslint-(?:disable|enable)(?:-next-line|-line)?(?:\s+{_list(_ID)})?", r"eslint-env\s+[\w,\s\-]+",
     r"@ts-(?:expect-error|ignore|nocheck|check)", r"@(?:vitest|jest)-environment\s+[\w\-]+",
@@ -100,7 +102,7 @@ ALLOWED_COMMENT = re.compile("|".join((
     r"swiftlint:(?:disable|enable)(?::(?:next|this|previous))?(?:\s+[a-z_]+)*",
     r"swift-format-ignore(?::\s*[\w, ]+)?", r"sourcery:\s*\S+(?:\s+[\w.=,\"'\-]+)*",
     r"periphery:ignore(?::\w+)?", r"swiftformat:\w+(?:\s+[\w,:]+)?",
-    rf"shellcheck(?:\s+(?:disable={_list(r'SC\d+')}|source=\S+|source-path=\S+|shell=\w+))+",
+    rf"shellcheck(?:\s+(?:disable={_list(_SC)}|source=\S+|source-path=\S+|shell=\w+))+",
     r"istanbul ignore (?:next|if|else|file)", r"(?:c8|v8) ignore (?:next|start|stop|file)(?:\s+\d+)?",
     r"nolint(?:nextline|begin|end)?(?::\s*" + _list(r"[\w\-]+") + r")?(?:\([\w\-, ]+\))?",
     r"go:build\s+!?\(?[\w.]+\)?(?:\s*(?:&&|\|\|)\s*!?\(?[\w.]+\)?)*", r"go:generate\s+\S.*",
